@@ -1,11 +1,18 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+
+  // Keep every asset a real file. The CSP in tauri.conf.json blocks data: fonts,
+  // and Vite would otherwise inline the smallest font subsets as data: URLs.
+  build: {
+    assetsInlineLimit: 0,
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

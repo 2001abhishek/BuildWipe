@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+/*
+ * The design system. Every colour and font in the app comes from these tokens.
+ * Tailwind's default palette and fonts are cleared, so a class like `bg-red-500`
+ * or `font-sans` produces nothing and can't creep in by accident.
+ */
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+
+  /* Fonts: primary for all interface text, secondary for paths and numbers. */
+  --font-primary: "Manrope Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-secondary: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  /* Surfaces, darkest to lightest. */
+  --color-canvas: oklch(0.165 0.014 260);
+  --color-surface: oklch(0.205 0.016 260);
+  --color-raised: oklch(0.25 0.018 260);
+  --color-line: oklch(0.32 0.018 260);
+
+  /* Text. */
+  --color-ink: oklch(0.96 0.005 260);
+  --color-ink-muted: oklch(0.77 0.012 260);
+  --color-ink-faint: oklch(0.66 0.014 260);
+
+  /* Primary: reclaimed space and the main action. */
+  --color-primary: oklch(0.83 0.15 165);
+  --color-primary-hover: oklch(0.88 0.13 165);
+  --color-on-primary: oklch(0.2 0.04 165);
+
+  /* Secondary: focus, filters and space that is found but not selected. */
+  --color-secondary: oklch(0.74 0.12 265);
+  --color-secondary-hover: oklch(0.8 0.1 265);
+
+  /* Status. */
+  --color-danger: oklch(0.63 0.2 25);
+  --color-danger-hover: oklch(0.69 0.19 25);
+  --color-on-danger: oklch(0.98 0.01 25);
+  --color-warning: oklch(0.83 0.14 80);
+
+  /* One marker colour per ecosystem. */
+  --color-eco-node: oklch(0.8 0.16 145);
+  --color-eco-rust: oklch(0.7 0.16 45);
+  --color-eco-python: oklch(0.86 0.14 95);
+  --color-eco-jvm: oklch(0.68 0.18 15);
+  --color-eco-dotnet: oklch(0.66 0.18 295);
+  --color-eco-mobile: oklch(0.76 0.13 225);
+  --color-eco-vendor: oklch(0.76 0.14 340);
+  --color-eco-game: oklch(0.78 0.1 190);
+  --color-eco-terraform: oklch(0.65 0.17 275);
+  --color-eco-junk: oklch(0.66 0.014 260);
+
+  /* The headline reclaimable figure. */
+  --text-display: 3.25rem;
+  --text-display--line-height: 1;
+  --text-display--letter-spacing: -0.04em;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-canvas font-primary text-ink select-none antialiased;
+    color-scheme: dark;
+    overflow: hidden;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-secondary;
+  }
+
+  input[type="checkbox"] {
+    @apply size-4 shrink-0 cursor-pointer accent-primary;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  * {
+    scrollbar-color: var(--color-line) transparent;
+    scrollbar-width: thin;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

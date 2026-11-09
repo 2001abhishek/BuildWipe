@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
+  "productName": "BuildWipe",
   "version": "0.1.0",
-  "identifier": "com.dshar.tauri-app",
+  "identifier": "com.dshar.buildwipe",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,13 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
-        "width": 800,
-        "height": 600
+        "title": "BuildWipe",
+        "width": 1240,
+        "height": 800,
+        "minWidth": 1000,
+        "minHeight": 640
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self' 'unsafe-inline' http://localhost:1420 http://127.0.0.1:1420; font-src 'self' http://localhost:1420 http://127.0.0.1:1420; img-src 'self' data:; connect-src ipc: http://ipc.localhost ws://localhost:1420 ws://127.0.0.1:1420"
     }
   },
   "bundle": {
