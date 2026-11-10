@@ -69,7 +69,7 @@ jobs:
           releaseBody: |
             Download the installer for your system below.
 
-            - **Windows:** the `-setup.exe` (or the `.msi`)
+            - **Windows:** the `-setup.exe`
             - **macOS:** the `.dmg`. It runs on Apple Silicon and Intel Macs.
             - **Linux:** the `.AppImage`, `.deb` or `.rpm`
 
@@ -77,6 +77,9 @@ jobs:
           releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
+          # The signatures are copied into latest.json, which is all the updater reads,
+          # so the separate .sig files would only clutter the release.
+          uploadUpdaterSignatures: false
           retryAttempts: 3
           args: ${{ matrix.args }}
 
@@ -94,6 +97,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "Files on the v$version release:"
+          gh api "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.tag_name == \"v$version\") | .assets[] | \"  \" + .name"
           asset=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
             --jq ".[] | select(.tag_name == \"v$version\") | .assets[] | select(.name == \"latest.json\") | .url" | head -n 1)
           if [ -z "$asset" ]; then
@@ -104,7 +110,7 @@ jobs:
           node -e '
             const manifest = require("./latest.json");
             const expected = [
-              "windows-x86_64", "windows-x86_64-nsis", "windows-x86_64-msi",
+              "windows-x86_64", "windows-x86_64-nsis",
               "darwin-aarch64", "darwin-x86_64",
               "linux-x86_64", "linux-x86_64-appimage", "linux-x86_64-deb", "linux-x86_64-rpm",
             ];
