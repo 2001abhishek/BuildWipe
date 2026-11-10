@@ -1,0 +1,122 @@
+# Publishes a release: run it from the Actions tab ("Release" → "Run workflow").
+#
+# It builds Windows, a universal macOS app (Apple Silicon and Intel) and Linux,
+# signs the update files, and uploads everything to a DRAFT GitHub Release named
+# after the version in src-tauri/tauri.conf.json. Nothing is public until you
+# open the draft and press "Publish release". From then on, installed copies of
+# BuildWipe find the update through latest.json.
+#
+# Needs two repository secrets, from the key generated with `tauri signer generate`:
+#   TAURI_SIGNING_PRIVATE_KEY           the contents of the .key file
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - os: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+          - os: windows-latest
+            args: ""
+            rust_targets: ""
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf xdg-utils
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: BuildWipe v__VERSION__
+          releaseBody: |
+            Download the installer for your system below.
+
+            - **Windows:** the `-setup.exe` (or the `.msi`)
+            - **macOS:** the `.dmg`. It runs on Apple Silicon and Intel Macs.
+            - **Linux:** the `.AppImage`, `.deb` or `.rpm`
+
+            BuildWipe checks for new versions itself, so this is the only manual download you'll need.
+          releaseDraft: true
+          prerelease: false
+          updaterJsonPreferNsis: true
+          retryAttempts: 3
+          args: ${{ matrix.args }}
+
+  # The three builds each add their entries to latest.json, and two finishing at
+  # once can lose one. This fails the run if any system is missing, before anyone
+  # can publish a release that leaves some users without updates.
+  check-updater-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that latest.json covers every system
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          asset=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.tag_name == \"v$version\") | .assets[] | select(.name == \"latest.json\") | .url" | head -n 1)
+          if [ -z "$asset" ]; then
+            echo "::error::No latest.json on the v$version release. Check that the signing secrets are set."
+            exit 1
+          fi
+          gh api -H "Accept: application/octet-stream" "$asset" > latest.json
+          node -e '
+            const manifest = require("./latest.json");
+            const expected = [
+              "windows-x86_64", "windows-x86_64-nsis", "windows-x86_64-msi",
+              "darwin-aarch64", "darwin-x86_64",
+              "linux-x86_64", "linux-x86_64-appimage", "linux-x86_64-deb", "linux-x86_64-rpm",
+            ];
+            const missing = expected.filter((key) => !manifest.platforms?.[key]?.url || !manifest.platforms[key].signature);
+            console.log(`latest.json for ${manifest.version} lists: ${Object.keys(manifest.platforms ?? {}).join(", ")}`);
+            if (manifest.version !== process.argv[1]) {
+              console.log(`::error::latest.json says ${manifest.version}, expected ${process.argv[1]}`);
+              process.exit(1);
+            }
+            if (missing.length) {
+              console.log(`::error::latest.json is missing ${missing.join(", ")}. Delete the draft release and run this workflow again.`);
+              process.exit(1);
+            }
+            console.log("Every system has a signed update entry. The draft is ready to publish.");
+          ' "$version"

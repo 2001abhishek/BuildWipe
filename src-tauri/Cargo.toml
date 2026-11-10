@@ -38,3 +38,8 @@ strip = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Desktop only: the updater and relaunch don't exist on mobile.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-process = "2.4.0"
+tauri-plugin-updater = "2.14.1"

@@ -4,6 +4,8 @@ import { ReclaimPanel } from "./components/ReclaimPanel";
 import { ResultsPane } from "./components/ResultsPane";
 import { ScanSetup } from "./components/ScanSetup";
 import { ThemeToggle } from "./components/ThemeToggle";
+import { UpdateButton, UpdateDialog } from "./components/Updates";
+import { useUpdater } from "./hooks/useUpdater";
 import { Button } from "./components/ui";
 import { ConfirmDialog, WipeDialog } from "./components/WipeDialogs";
 import { useScan } from "./hooks/useScan";
@@ -29,6 +31,8 @@ export default function App() {
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isConfirming, setIsConfirming] = useState(false);
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
+  const updater = useUpdater();
+  const [isUpdateOpen, setIsUpdateOpen] = useState(false);
 
   const refreshDisks = useCallback(() => listDisks().then(setDisks), []);
 
@@ -139,8 +143,12 @@ export default function App() {
           <BrushCleaning className="size-6 text-primary" aria-hidden />
           <span className="text-lg font-extrabold tracking-tight">BuildWipe</span>
           <span className="text-sm text-ink-faint">Clean developer build leftovers</span>
+          {updater.version && (
+            <span className="font-secondary text-xs text-ink-faint">v{updater.version}</span>
+          )}
         </div>
         <div className="flex items-center gap-3">
+          <UpdateButton updater={updater} onOpen={() => setIsUpdateOpen(true)} />
           {scan.phase === "done" && (
             <Button onClick={backToSetup}>
               <RotateCcw className="size-4" aria-hidden />
@@ -199,6 +207,14 @@ export default function App() {
         />
       )}
       {wipe && <WipeDialog wipe={wipe} onStop={stopWipe} onClose={closeWipe} />}
+      {isUpdateOpen && updater.update && (
+        <UpdateDialog
+          updater={updater}
+          isWiping={wipe?.phase === "running"}
+          os={platform.os}
+          onClose={() => setIsUpdateOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -7,6 +7,9 @@
     "core:default",
     "core:window:allow-set-theme",
     "dialog:allow-open",
-    "opener:allow-reveal-item-in-dir"
+    "opener:allow-reveal-item-in-dir",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "process:allow-restart"
   ]
 }
