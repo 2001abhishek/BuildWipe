@@ -16,7 +16,8 @@
         "width": 1240,
         "height": 800,
         "minWidth": 1000,
-        "minHeight": 640
+        "minHeight": 640,
+        "additionalBrowserArgs": "--disable-gpu --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
       }
     ],
     "security": {

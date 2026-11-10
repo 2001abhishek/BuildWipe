@@ -1,5 +1,5 @@
 import { useCallback, useReducer } from "react";
-import { cancelScan, startScan } from "../lib/api";
+import { cancelScan, clearScan, startScan } from "../lib/api";
 
 const initialState = {
   phase: "idle", // idle | scanning | done
@@ -62,7 +62,10 @@ export function useScan() {
     cancelScan();
   }, []);
 
-  const reset = useCallback(() => dispatch({ type: "reset" }), []);
+  const reset = useCallback(() => {
+    clearScan();
+    dispatch({ type: "reset" });
+  }, []);
   const removeItem = useCallback((path) => dispatch({ type: "itemRemoved", path }), []);
   const shrinkItem = useCallback((path, size) => dispatch({ type: "itemShrunk", path, size }), []);
 

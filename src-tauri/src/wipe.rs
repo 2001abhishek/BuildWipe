@@ -64,7 +64,7 @@ fn wipe_one(session: &Session, path_text: &str, cancel: &AtomicBool) -> Result<u
     let path = PathBuf::from(path_text);
     let refuse = |reason: &str| Err((reason.to_string(), 0, 0));
 
-    let is_known = session.found.lock().is_ok_and(|found| found.contains_key(&path));
+    let is_known = session.found.lock().is_ok_and(|found| found.contains(&path));
     if !is_known {
         return refuse("Not part of the latest scan");
     }
@@ -205,6 +205,21 @@ mod tests {
         let events = wipe(&session, vec![text(root.join("precious"))]);
 
         assert!(root.join("precious/thesis.docx").exists());
+        assert!(matches!(events[0], WipeEvent::Failed { .. }));
+    }
+
+    #[test]
+    fn refuses_a_real_artifact_once_its_session_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        touch(root, "app/package.json", 5);
+        touch(root, "app/node_modules/x.js", 5);
+        scanned(root);
+
+        // A fresh session is what's left after "New scan": this path has no standing in it.
+        let events = wipe(&Session::default(), vec![text(root.join("app/node_modules"))]);
+
+        assert!(root.join("app/node_modules/x.js").exists());
         assert!(matches!(events[0], WipeEvent::Failed { .. }));
     }
 

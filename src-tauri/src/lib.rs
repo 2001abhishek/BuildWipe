@@ -17,6 +17,22 @@ struct AppState {
     wipe_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
+impl AppState {
+    /// Forgets the current scan: stops it if running and frees its allowlist, so
+    /// none of its paths can be wiped until they are scanned again.
+    fn clear_session(&self) {
+        if let Ok(mut current) = self.session.lock() {
+            if let Some(session) = current.take() {
+                session.cancel.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn current_session(&self) -> Option<Arc<Session>> {
+        self.session.lock().ok().and_then(|current| current.clone())
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiskInfo {
@@ -78,17 +94,17 @@ fn cancel_scan(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
+fn clear_scan(state: State<'_, AppState>) {
+    state.clear_session();
+}
+
+#[tauri::command]
 fn start_wipe(
     paths: Vec<String>,
     on_event: Channel<WipeEvent>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let session = state
-        .session
-        .lock()
-        .ok()
-        .and_then(|current| current.clone())
-        .ok_or("Run a scan before wiping.")?;
+    let session = state.current_session().ok_or("Run a scan before wiping.")?;
 
     let cancel = Arc::new(AtomicBool::new(false));
     if let Ok(mut current) = state.wipe_cancel.lock() {
@@ -122,9 +138,34 @@ pub fn run() {
             list_disks,
             start_scan,
             cancel_scan,
+            clear_scan,
             start_wipe,
             cancel_wipe
         ])
         .run(tauri::generate_context!())
         .expect("error while running BuildWipe");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clearing_stops_the_scan_and_leaves_nothing_to_wipe() {
+        let state = AppState::default();
+        let session = Arc::new(Session::default());
+        *state.session.lock().unwrap() = Some(session.clone());
+
+        state.clear_session();
+
+        assert!(session.cancel.load(Ordering::Relaxed));
+        assert!(state.current_session().is_none());
+    }
+
+    #[test]
+    fn clearing_with_no_scan_is_harmless() {
+        let state = AppState::default();
+        state.clear_session();
+        assert!(state.current_session().is_none());
+    }
 }

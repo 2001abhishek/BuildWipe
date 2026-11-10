@@ -2,7 +2,7 @@
 
 use crate::rules::{self, Category, Listing};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -38,11 +38,12 @@ pub enum ScanEvent {
     Finished { cancelled: bool, dirs: u64, unreadable: u64, elapsed_ms: u64 },
 }
 
-/// One scan's results. Only paths recorded here can ever be wiped.
+/// One scan's allowlist. Only paths recorded here can ever be wiped. The UI holds
+/// the full item details, so keeping just the paths avoids a second copy of them.
 #[derive(Default)]
 pub struct Session {
     pub cancel: AtomicBool,
-    pub found: Mutex<HashMap<PathBuf, Item>>,
+    pub found: Mutex<HashSet<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -289,7 +290,7 @@ fn collect(
         let disconnected = matches!(received, Err(RecvTimeoutError::Disconnected));
         if let Ok(item) = received {
             if let Ok(mut found) = session.found.lock() {
-                found.insert(PathBuf::from(&item.path), item.clone());
+                found.insert(PathBuf::from(&item.path));
             }
             batch.push(item);
         }
@@ -368,14 +369,21 @@ mod tests {
         let session = Session::default();
         let mut events = Vec::new();
         run(&session, vec![root.to_string_lossy().into_owned()], &[], |e| events.push(e));
-        let found = session.found.into_inner().unwrap();
-        let items = found
-            .into_iter()
-            .map(|(path, item)| {
-                let relative = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
-                (relative, item)
-            })
-            .collect();
+
+        let mut items = BTreeMap::new();
+        let mut reported = HashSet::new();
+        for event in &events {
+            if let ScanEvent::Found { items: batch } = event {
+                for item in batch {
+                    let path = PathBuf::from(&item.path);
+                    let relative = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                    items.insert(relative, item.clone());
+                    reported.insert(path);
+                }
+            }
+        }
+        // The wipe allowlist must be exactly what the UI was told about.
+        assert_eq!(session.found.into_inner().unwrap(), reported);
         (items, events)
     }
 
