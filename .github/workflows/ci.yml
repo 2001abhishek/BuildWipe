@@ -1,0 +1,63 @@
+# Tests the backend and builds the app on Windows, macOS and Ubuntu.
+# The built installers are attached to each run as downloadable artifacts.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: macos-latest
+          # 22.04 rather than latest, so the Linux build runs on older glibc versions too.
+          - os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      # The backend embeds the built frontend, so it must exist before the tests compile.
+      - run: npm run build
+
+      - name: Backend tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build the app
+        run: npm run tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BuildWipe-${{ runner.os }}
+          path: |
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/**/*.AppImage
+          if-no-files-found: error

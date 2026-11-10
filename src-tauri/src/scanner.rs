@@ -1,5 +1,6 @@
 //! Parallel filesystem walk that streams matched artifacts to the UI.
 
+use crate::platform::Policy;
 use crate::rules::{self, Category, Listing};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -130,6 +131,8 @@ struct Walk<'a> {
     session: &'a Session,
     counters: &'a Counters,
     mounts: &'a [String],
+    policy: &'a Policy,
+    roots: HashSet<PathBuf>,
     tx: Sender<Item>,
 }
 
@@ -223,7 +226,7 @@ fn visit<'s>(
             walk.emit(&dir, Category::Python, None, &project);
             return;
         }
-        if rules::is_installed_software(&listing) {
+        if walk.policy.is_installed_software(&listing) {
             return;
         }
     }
@@ -246,6 +249,10 @@ fn visit<'s>(
         if !kind.is_dir() {
             continue;
         }
+        // Another selected root, such as a second disk mounted inside this one, gets its own walk.
+        if walk.roots.contains(&path) {
+            continue;
+        }
 
         if let Some(found) = rules::match_dir(&name, &listing) {
             let target = match found.nested {
@@ -259,20 +266,21 @@ fn visit<'s>(
             continue;
         }
 
-        if !rules::should_skip_dir(&dir, &name, at_fs_root) {
+        if !walk.policy.skip_dir(&dir, &name, at_fs_root) {
             let project = project.clone();
             scope.spawn(move |s| visit(s, walk, path, project, false));
         }
     }
 }
 
-/// Drops roots that sit inside another selected root, so nothing is counted twice.
-fn distinct_roots(roots: Vec<String>) -> Vec<PathBuf> {
+/// Each root is walked once. A root inside another is still walked on its own,
+/// even when the outer walk would skip that spot (macOS keeps other disks under
+/// the skipped `/Volumes`), and the outer walk steps around it, so nothing is
+/// counted twice.
+fn unique_roots(roots: Vec<String>) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
     roots.sort();
     roots.dedup();
-    let all = roots.clone();
-    roots.retain(|r| !all.iter().any(|other| other != r && r.starts_with(other)));
     roots
 }
 
@@ -315,9 +323,11 @@ pub fn run(
     session: &Session,
     roots: Vec<String>,
     mounts: &[String],
+    policy: &Policy,
     mut send: impl FnMut(ScanEvent) + Send,
 ) {
     let started = Instant::now();
+    let roots = unique_roots(roots);
     let counters = Counters::default();
     let (tx, rx) = mpsc::channel();
     let pool = rayon::ThreadPoolBuilder::new()
@@ -329,10 +339,17 @@ pub fn run(
         let (counters_ref, send_ref) = (&counters, &mut send);
         let collector = threads.spawn(move || collect(session, rx, counters_ref, send_ref));
 
-        let walk = Walk { session, counters: &counters, mounts, tx };
+        let walk = Walk {
+            session,
+            counters: &counters,
+            mounts,
+            policy,
+            roots: roots.iter().cloned().collect(),
+            tx,
+        };
         let walk_ref = &walk;
         pool.scope(|scope| {
-            for root in distinct_roots(roots) {
+            for root in roots {
                 if root.is_dir() {
                     scope.spawn(move |s| visit(s, walk_ref, root, Project::default(), true));
                 } else {
@@ -355,8 +372,9 @@ pub fn run(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::platform::{Os, Platform};
     use std::collections::BTreeMap;
 
     fn touch(root: &Path, relative: &str, bytes: usize) {
@@ -365,10 +383,16 @@ mod tests {
         fs::write(path, vec![0u8; bytes]).unwrap();
     }
 
-    fn scan(root: &Path) -> (BTreeMap<String, Item>, Vec<ScanEvent>) {
+    fn os_policy(os: Os, home: Option<&Path>) -> Policy {
+        Policy::new(Platform::for_os(os), home.map(Path::to_path_buf))
+    }
+
+    /// Scans `roots` as `policy` would, keyed by path relative to `base`.
+    fn scan_with(base: &Path, roots: &[&Path], policy: &Policy) -> (BTreeMap<String, Item>, Vec<ScanEvent>) {
         let session = Session::default();
         let mut events = Vec::new();
-        run(&session, vec![root.to_string_lossy().into_owned()], &[], |e| events.push(e));
+        let roots = roots.iter().map(|r| r.to_string_lossy().into_owned()).collect();
+        run(&session, roots, &[], policy, |e| events.push(e));
 
         let mut items = BTreeMap::new();
         let mut reported = HashSet::new();
@@ -376,8 +400,8 @@ mod tests {
             if let ScanEvent::Found { items: batch } = event {
                 for item in batch {
                     let path = PathBuf::from(&item.path);
-                    let relative = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
-                    items.insert(relative, item.clone());
+                    let relative = path.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+                    assert!(items.insert(relative, item.clone()).is_none(), "reported twice: {}", item.path);
                     reported.insert(path);
                 }
             }
@@ -385,6 +409,10 @@ mod tests {
         // The wipe allowlist must be exactly what the UI was told about.
         assert_eq!(session.found.into_inner().unwrap(), reported);
         (items, events)
+    }
+
+    fn scan(root: &Path) -> (BTreeMap<String, Item>, Vec<ScanEvent>) {
+        scan_with(root, &[root], &Policy::new(Platform::current(), None))
     }
 
     #[test]
@@ -433,27 +461,80 @@ mod tests {
     }
 
     #[test]
-    fn leaves_lookalikes_and_protected_folders_alone() {
+    fn every_os_leaves_lookalikes_and_shared_toolchains_alone() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         touch(root, "docs/target/report.pdf", 10);
         touch(root, "docs/build/notes.txt", 10);
         touch(root, "docs/bin/tool.exe", 10);
         touch(root, "docs/Library/book.epub", 10);
-        touch(root, "code/AppData/Local/app/package.json", 1);
-        touch(root, "code/AppData/Local/app/node_modules/x.js", 10);
-        touch(root, "installed/editor/resources/app/package.json", 1);
-        touch(root, "installed/editor/resources/app/node_modules/x.js", 10);
-        touch(root, "installed/tool/unins000.exe", 1);
-        touch(root, "installed/tool/package.json", 1);
-        touch(root, "installed/tool/node_modules/x.js", 10);
+        touch(root, "editor/resources/app/package.json", 1);
+        touch(root, "editor/resources/app/node_modules/x.js", 10);
         touch(root, "home/.cargo/registry/src/crate/Cargo.toml", 1);
         touch(root, "home/.cargo/registry/src/crate/target/x", 10);
+        // Go's module cache: deleting a vendor folder in here breaks checksum verification.
+        touch(root, "home/go/pkg/mod/github.com/x/lib@v1.2.0/go.mod", 1);
+        touch(root, "home/go/pkg/mod/github.com/x/lib@v1.2.0/vendor/dep/dep.go", 10);
+        touch(root, "electron-app/app.asar", 1);
+        touch(root, "electron-app/package.json", 1);
+        touch(root, "electron-app/node_modules/x.js", 10);
+
+        for os in [Os::Windows, Os::Macos, Os::Linux] {
+            let (items, _) = scan_with(root, &[root], &os_policy(os, Some(&root.join("home"))));
+            assert!(items.is_empty(), "{os:?} matched: {:?}", items.keys());
+        }
+    }
+
+    #[test]
+    fn windows_leaves_installed_software_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        touch(root, "user/AppData/Local/app/package.json", 1);
+        touch(root, "user/AppData/Local/app/node_modules/x.js", 10);
+        touch(root, "tools/editor/unins000.exe", 1);
+        touch(root, "tools/editor/package.json", 1);
+        touch(root, "tools/editor/node_modules/x.js", 10);
         touch(root, "Python314/python.exe", 1);
         touch(root, "Python314/Lib/email/__pycache__/a.pyc", 10);
 
-        let (items, _) = scan(root);
+        let (items, _) = scan_with(root, &[root], &os_policy(Os::Windows, None));
         assert!(items.is_empty(), "unexpected matches: {:?}", items.keys());
+    }
+
+    #[test]
+    fn macos_leaves_app_bundles_and_library_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let home = root.join("Users/me");
+        touch(root, "Users/me/Applications/Editor.app/Contents/Resources/package.json", 1);
+        touch(root, "Users/me/Applications/Editor.app/Contents/Resources/node_modules/x.js", 10);
+        touch(root, "Users/me/Library/Caches/tool/package.json", 1);
+        touch(root, "Users/me/Library/Caches/tool/node_modules/x.js", 10);
+        touch(root, "Users/me/code/tools/Viewer.app/Contents/package.json", 1);
+        touch(root, "Users/me/code/tools/Viewer.app/Contents/node_modules/x.js", 10);
+        // A real project in the same home is still found.
+        touch(root, "Users/me/code/site/package.json", 1);
+        touch(root, "Users/me/code/site/node_modules/x.js", 10);
+
+        let (items, _) = scan_with(root, &[root], &os_policy(Os::Macos, Some(&home)));
+        assert_eq!(items.keys().collect::<Vec<_>>(), ["Users/me/code/site/node_modules"]);
+    }
+
+    #[test]
+    fn linux_leaves_snaps_and_appimages_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let home = root.join("home/me");
+        touch(root, "home/me/snap/code/common/package.json", 1);
+        touch(root, "home/me/snap/code/common/node_modules/x.js", 10);
+        touch(root, "home/me/apps/squashfs-root/AppRun", 1);
+        touch(root, "home/me/apps/squashfs-root/package.json", 1);
+        touch(root, "home/me/apps/squashfs-root/node_modules/x.js", 10);
+        touch(root, "home/me/code/api/Cargo.toml", 1);
+        touch(root, "home/me/code/api/target/debug/api", 10);
+
+        let (items, _) = scan_with(root, &[root], &os_policy(Os::Linux, Some(&home)));
+        assert_eq!(items.keys().collect::<Vec<_>>(), ["home/me/code/api/target"]);
     }
 
     #[test]
@@ -500,14 +581,35 @@ mod tests {
     }
 
     #[test]
-    fn nested_roots_are_not_counted_twice() {
-        let roots = distinct_roots(vec![
-            "D:\\code\\app".into(),
-            "D:\\code".into(),
-            "D:\\code".into(),
-            "E:\\other".into(),
-        ]);
-        assert_eq!(roots, [PathBuf::from("D:\\code"), PathBuf::from("E:\\other")]);
+    fn a_root_inside_another_root_is_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        touch(root, "a/package.json", 1);
+        touch(root, "a/node_modules/x.js", 1);
+        touch(root, "b/inner/package.json", 1);
+        touch(root, "b/inner/node_modules/x.js", 1);
+        let inner = root.join("b");
+
+        // scan_with fails if any item is reported twice.
+        let (items, _) = scan_with(root, &[root, &inner, root], &Policy::new(Platform::current(), None));
+        assert_eq!(items.keys().collect::<Vec<_>>(), ["a/node_modules", "b/inner/node_modules"]);
+    }
+
+    #[test]
+    fn a_chosen_root_is_walked_even_where_the_outer_walk_would_skip() {
+        // Like a second disk under macOS's skipped /Volumes, or a folder the user
+        // deliberately added inside AppData.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        touch(root, "AppData/project/package.json", 1);
+        touch(root, "AppData/project/node_modules/x.js", 1);
+        let chosen = root.join("AppData").join("project");
+        let windows = os_policy(Os::Windows, None);
+
+        let (outer_only, _) = scan_with(root, &[root], &windows);
+        assert!(outer_only.is_empty());
+        let (both, _) = scan_with(root, &[root, &chosen], &windows);
+        assert_eq!(both.keys().collect::<Vec<_>>(), ["AppData/project/node_modules"]);
     }
 
     #[test]
@@ -519,30 +621,52 @@ mod tests {
         let session = Session::default();
         session.cancel.store(true, Ordering::Relaxed);
         let mut events = Vec::new();
-        run(&session, vec![dir.path().to_string_lossy().into_owned()], &[], |e| events.push(e));
+        let roots = vec![dir.path().to_string_lossy().into_owned()];
+        run(&session, roots, &[], &Policy::current(), |e| events.push(e));
 
         assert!(session.found.lock().unwrap().is_empty());
         assert!(matches!(events.last(), Some(ScanEvent::Finished { cancelled: true, .. })));
     }
 
-    #[cfg(windows)]
+    /// Links `link` to the folder `target`: a junction on Windows, a symlink elsewhere.
+    pub(crate) fn link_dir(target: &Path, link: &Path) {
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "mklink failed");
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
     #[test]
-    fn does_not_follow_junctions() {
+    fn does_not_follow_links_to_other_folders() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         touch(root, "real/package.json", 1);
         touch(root, "real/node_modules/x.js", 10);
         fs::create_dir_all(root.join("scan")).unwrap();
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(root.join("scan").join("link"))
-            .arg(root.join("real"))
-            .output()
-            .unwrap()
-            .status;
-        assert!(status.success());
+        link_dir(&root.join("real"), &root.join("scan").join("link"));
 
         let (items, _) = scan(&root.join("scan"));
-        assert!(items.is_empty(), "followed a junction: {:?}", items.keys());
+        assert!(items.is_empty(), "followed a link: {:?}", items.keys());
+    }
+
+    #[test]
+    fn a_linked_artifact_is_not_offered_for_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        touch(root, "shared/x.js", 10);
+        touch(root, "app/package.json", 1);
+        link_dir(&root.join("shared"), &root.join("app").join("node_modules"));
+
+        let (items, _) = scan(&root.join("app"));
+        assert!(items.is_empty(), "offered a link: {:?}", items.keys());
     }
 }

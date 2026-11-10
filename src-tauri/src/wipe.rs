@@ -3,6 +3,7 @@
 //! Nothing the UI sends is trusted on its own. A path must have been recorded
 //! by the scan, and must still classify as an artifact on disk right now.
 
+use crate::platform::{native, Platform};
 use crate::rules;
 use crate::scanner::{self, Session};
 use serde::Serialize;
@@ -27,38 +28,13 @@ fn remove(path: &Path) -> io::Result<()> {
     let attempt = |p: &Path| if is_dir { fs::remove_dir_all(p) } else { fs::remove_file(p) };
 
     match attempt(path) {
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied && cfg!(windows) => {
-            clear_read_only(path);
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            native::make_writable(path);
             attempt(path)
         }
         result => result,
     }
 }
-
-/// Git object files and some packages are read-only, which blocks deletion on Windows.
-#[cfg(windows)]
-fn clear_read_only(path: &Path) {
-    let mut pending = vec![path.to_path_buf()];
-    while let Some(current) = pending.pop() {
-        let Ok(meta) = fs::symlink_metadata(&current) else { continue };
-        if meta.file_type().is_symlink() {
-            continue;
-        }
-        if meta.is_dir() {
-            if let Ok(entries) = fs::read_dir(&current) {
-                pending.extend(entries.flatten().map(|e| e.path()));
-            }
-        } else if meta.permissions().readonly() {
-            let mut permissions = meta.permissions();
-            #[allow(clippy::permissions_set_readonly_false)]
-            permissions.set_readonly(false);
-            let _ = fs::set_permissions(&current, permissions);
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn clear_read_only(_path: &Path) {}
 
 fn wipe_one(session: &Session, path_text: &str, cancel: &AtomicBool) -> Result<u64, (String, u64, u64)> {
     let path = PathBuf::from(path_text);
@@ -84,17 +60,9 @@ fn wipe_one(session: &Session, path_text: &str, cancel: &AtomicBool) -> Result<u
             // A partial delete still freed space, so report what actually remains.
             let never = AtomicBool::new(false);
             let remaining = scanner::measure(&path, &never).map_or(0, |m| m.size);
-            Err((friendly(&error), before.saturating_sub(remaining), remaining))
+            let reason = Platform::current().describe(&error);
+            Err((reason, before.saturating_sub(remaining), remaining))
         }
-    }
-}
-
-fn friendly(error: &io::Error) -> String {
-    match error.kind() {
-        io::ErrorKind::PermissionDenied => {
-            "Access denied. A program may be using it, or it may need administrator rights.".into()
-        }
-        _ => error.to_string(),
     }
 }
 
@@ -147,6 +115,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::Policy;
 
     fn touch(root: &Path, relative: &str, bytes: usize) {
         let path = root.join(relative);
@@ -156,7 +125,8 @@ mod tests {
 
     fn scanned(root: &Path) -> Session {
         let session = Session::default();
-        scanner::run(&session, vec![root.to_string_lossy().into_owned()], &[], |_| {});
+        let roots = vec![root.to_string_lossy().into_owned()];
+        scanner::run(&session, roots, &[], &Policy::new(Platform::current(), None), |_| {});
         session
     }
 
@@ -280,28 +250,56 @@ mod tests {
         assert!(matches!(events.last(), Some(WipeEvent::Finished { removed: 2, failed: 0, .. })));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn a_junction_inside_an_artifact_does_not_take_its_target_with_it() {
+    fn a_link_inside_an_artifact_does_not_take_its_target_with_it() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         touch(root, "outside/keep.txt", 5);
         touch(root, "scan/app/package.json", 5);
         touch(root, "scan/app/node_modules/x.js", 5);
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(root.join("scan").join("app").join("node_modules").join("linked"))
-            .arg(root.join("outside"))
-            .output()
-            .unwrap()
-            .status;
-        assert!(status.success());
+        // A junction on Windows, a symlink on macOS and Linux.
+        scanner::tests::link_dir(
+            &root.join("outside"),
+            &root.join("scan").join("app").join("node_modules").join("linked"),
+        );
 
         let session = scanned(&root.join("scan"));
-        wipe(&session, vec![text(root.join("scan/app/node_modules"))]);
+        let events = wipe(&session, vec![text(root.join("scan/app/node_modules"))]);
 
         assert!(!root.join("scan/app/node_modules").exists());
-        assert!(root.join("outside/keep.txt").exists(), "deleted through a junction");
+        assert!(root.join("outside/keep.txt").exists(), "deleted through a link");
+        assert!(matches!(events.last(), Some(WipeEvent::Finished { removed: 1, failed: 0, .. })));
+    }
+
+    /// Go and some build tools leave folders without write permission, which
+    /// blocks deleting anything inside them on macOS and Linux.
+    #[cfg(unix)]
+    #[test]
+    fn removes_folders_without_write_permission() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        touch(root, "app/package.json", 5);
+        touch(root, "app/node_modules/pkg/sub/x.js", 5);
+        let locked = root.join("app/node_modules/pkg");
+        fs::set_permissions(locked.join("sub"), fs::Permissions::from_mode(0o000)).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let session = scanned(root);
+        let events = wipe(&session, vec![text(root.join("app/node_modules"))]);
+
+        assert!(!root.join("app/node_modules").exists(), "{events:?}");
+        assert!(root.join("app/package.json").exists());
+        assert!(matches!(events.last(), Some(WipeEvent::Finished { removed: 1, failed: 0, .. })));
+    }
+
+    #[test]
+    fn a_failure_is_explained_in_the_current_os_terms() {
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        let code = if cfg!(windows) { 5 } else { 13 };
+        let explained = Platform::current().describe(&io::Error::from_raw_os_error(code));
+        assert_ne!(explained, denied.to_string());
+        assert!(explained.len() > 20, "{explained}");
     }
 
     #[test]

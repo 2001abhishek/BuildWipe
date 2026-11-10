@@ -3,6 +3,7 @@ name = "buildwipe"
 version = "0.1.0"
 description = "Find and remove build artifacts across every disk"
 authors = ["you"]
+license = "GPL-3.0-or-later"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

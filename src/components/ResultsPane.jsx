@@ -63,7 +63,7 @@ function ProjectRow({ group, isExpanded, selected, onToggleExpand, onBulk }) {
   );
 }
 
-function ItemRow({ item, isSelected, onToggle }) {
+function ItemRow({ item, isSelected, fileManager, onToggle }) {
   const meta = CATEGORIES[item.category];
   return (
     <div className="group flex h-full items-center gap-3 border-b border-line/40 bg-surface/40 pr-4 pl-11 text-sm">
@@ -75,8 +75,8 @@ function ItemRow({ item, isSelected, onToggle }) {
       <span className="w-20 shrink-0 text-right font-secondary text-xs text-ink-muted">{formatBytes(item.size)}</span>
       <button
         type="button"
-        aria-label={`Show ${item.path} in file manager`}
-        title="Show in file manager"
+        aria-label={`Show ${item.path} in ${fileManager}`}
+        title={`Show in ${fileManager}`}
         className="w-7 shrink-0 rounded p-1 text-ink-faint opacity-0 group-hover:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100"
         onClick={() => reveal(item.path)}
       >
@@ -165,7 +165,7 @@ function EmptyState({ icon: Icon, title, children }) {
   );
 }
 
-export function ResultsPane({ scan, groups, visibleItems, filters, setFilters, selected, onToggle, onBulk }) {
+export function ResultsPane({ scan, groups, visibleItems, filters, setFilters, selected, fileManager, onToggle, onBulk }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const scrollRef = useRef(null);
 
@@ -240,7 +240,12 @@ export function ResultsPane({ scan, groups, visibleItems, filters, setFilters, s
                       onBulk={onBulk}
                     />
                   ) : (
-                    <ItemRow item={entry.item} isSelected={selected.has(entry.item.path)} onToggle={onToggle} />
+                    <ItemRow
+                      item={entry.item}
+                      isSelected={selected.has(entry.item.path)}
+                      fileManager={fileManager}
+                      onToggle={onToggle}
+                    />
                   )}
                 </div>
               );

@@ -9,10 +9,13 @@ import { ConfirmDialog, WipeDialog } from "./components/WipeDialogs";
 import { useScan } from "./hooks/useScan";
 import { useTheme } from "./hooks/useTheme";
 import { useWipe } from "./hooks/useWipe";
-import { listDisks, pickFolder } from "./lib/api";
+import { listDisks, pickFolder, platformInfo } from "./lib/api";
 import { bulkPaths, filterItems, groupByProject, summarize } from "./lib/results";
 
 const INITIAL_FILTERS = { search: "", category: null, olderThanDays: 0, sort: "size" };
+
+// Neutral wording until the backend says which OS this is.
+const DEFAULT_PLATFORM = { os: null, trashName: "Trash", fileManager: "your file manager" };
 
 export default function App() {
   const scan = useScan();
@@ -25,13 +28,16 @@ export default function App() {
   const [selected, setSelected] = useState(() => new Set());
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
 
   const refreshDisks = useCallback(() => listDisks().then(setDisks), []);
 
   useEffect(() => {
+    platformInfo().then(setPlatform);
+    // Network shares are listed but not preselected, because walking them is slow.
     listDisks().then((found) => {
       setDisks(found);
-      setChosenDisks(new Set(found.map((disk) => disk.mount)));
+      setChosenDisks(new Set(found.filter((disk) => !disk.network).map((disk) => disk.mount)));
     });
   }, []);
 
@@ -177,6 +183,7 @@ export default function App() {
             filters={filters}
             setFilters={setFilters}
             selected={selected}
+            fileManager={platform.fileManager}
             onToggle={toggleOne}
             onBulk={toggleBulk}
           />
@@ -184,7 +191,12 @@ export default function App() {
       )}
 
       {isConfirming && (
-        <ConfirmDialog items={selectedItems} onCancel={() => setIsConfirming(false)} onConfirm={confirmWipe} />
+        <ConfirmDialog
+          items={selectedItems}
+          trashName={platform.trashName}
+          onCancel={() => setIsConfirming(false)}
+          onConfirm={confirmWipe}
+        />
       )}
       {wipe && <WipeDialog wipe={wipe} onStop={stopWipe} onClose={closeWipe} />}
     </div>

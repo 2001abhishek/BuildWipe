@@ -1,4 +1,6 @@
-//! What counts as a removable build artifact, and what must never be touched.
+//! What counts as a removable build artifact. These rules are the same on
+//! every OS. Where the scanner must not go is OS-specific and lives in
+//! `platform`.
 //!
 //! A folder name alone is never enough for ambiguous names: `target`, `build`,
 //! `bin`, `Library` and friends only match when the files beside them prove
@@ -222,70 +224,6 @@ pub fn is_virtualenv(listing: &Listing) -> bool {
     listing.has("pyvenv.cfg")
 }
 
-/// True when a folder holds an installed application or toolchain. Its
-/// dependencies are load-bearing, so nothing inside may be offered for removal.
-pub fn is_installed_software(listing: &Listing) -> bool {
-    ["app.asar", "unins000.exe", "uninstall.exe", "conda-meta", "python.exe"]
-        .iter()
-        .any(|n| listing.has(n))
-}
-
-/// True when the walker must not descend into this unmatched child folder.
-///
-/// `at_fs_root` means the parent is a drive or filesystem root, where names
-/// like `Windows` are the OS itself. Deeper down the same name can be a normal
-/// project folder, such as the `windows` runner in a Flutter app.
-pub fn should_skip_dir(parent: &Path, name: &str, at_fs_root: bool) -> bool {
-    let lower = name.to_lowercase();
-
-    if lower.starts_with('.') && lower != ".venv" && lower != ".virtualenv" {
-        return true;
-    }
-
-    const ANYWHERE: &[&str] = &[
-        "$recycle.bin",
-        "system volume information",
-        "program files",
-        "program files (x86)",
-        "programdata",
-        "appdata",
-        "windowsapps",
-        "steamapps",
-        "anaconda3",
-        "miniconda3",
-        "site-packages",
-    ];
-    if ANYWHERE.contains(&lower.as_str()) {
-        return true;
-    }
-
-    if lower == "app"
-        && parent
-            .file_name()
-            .is_some_and(|p| p.eq_ignore_ascii_case("resources"))
-    {
-        return true;
-    }
-
-    if at_fs_root {
-        const WINDOWS_ROOT: &[&str] = &["windows", "recovery", "perflogs", "msocache", "config.msi"];
-        const UNIX_ROOT: &[&str] = &[
-            "bin", "boot", "dev", "etc", "lib", "lib64", "opt", "proc", "run", "sbin", "snap",
-            "sys", "tmp", "usr", "var", "system", "library", "applications", "private", "volumes",
-            "cores",
-        ];
-        if lower.starts_with('$') || WINDOWS_ROOT.contains(&lower.as_str()) {
-            return true;
-        }
-        if cfg!(not(windows)) && UNIX_ROOT.contains(&lower.as_str()) {
-            return true;
-        }
-    }
-
-    // ~/Library on macOS. Unity's Library folder has already matched by this point.
-    cfg!(target_os = "macos") && name == "Library"
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Classified {
     pub category: Category,
@@ -407,25 +345,5 @@ mod tests {
         assert!(is_junk_file(".DS_Store"));
         assert!(is_junk_file("thumbs.db"));
         assert!(!is_junk_file("desktop.ini"));
-    }
-
-    #[test]
-    fn protected_folders_are_skipped() {
-        let root = Path::new("C:\\");
-        let deep = Path::new("C:\\code\\app");
-        assert!(should_skip_dir(root, "Windows", true));
-        assert!(should_skip_dir(root, "$Recycle.Bin", true));
-        assert!(should_skip_dir(deep, "AppData", false));
-        assert!(should_skip_dir(deep, "Program Files", false));
-        assert!(should_skip_dir(deep, ".cargo", false));
-        assert!(should_skip_dir(Path::new("D:\\apps\\editor\\resources"), "app", false));
-    }
-
-    #[test]
-    fn ordinary_project_folders_are_walked() {
-        // A Flutter project has a `windows` folder that is not the OS.
-        assert!(!should_skip_dir(Path::new("C:\\code\\app"), "windows", false));
-        assert!(!should_skip_dir(Path::new("C:\\code"), "src", false));
-        assert!(!should_skip_dir(Path::new("C:\\code\\app"), ".venv", false));
     }
 }

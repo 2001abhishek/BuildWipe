@@ -9,6 +9,7 @@ function channelFor(onEvent) {
 }
 
 export const listDisks = () => invoke("list_disks");
+export const platformInfo = () => invoke("platform_info");
 export const startScan = (roots, onEvent) =>
   invoke("start_scan", { roots, onEvent: channelFor(onEvent) });
 export const cancelScan = () => invoke("cancel_scan");

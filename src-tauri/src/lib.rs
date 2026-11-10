@@ -1,7 +1,9 @@
+mod platform;
 mod rules;
 mod scanner;
 mod wipe;
 
+use platform::{DiskKind, Platform, PlatformInfo, Policy};
 use scanner::{ScanEvent, Session};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,18 +43,27 @@ struct DiskInfo {
     total: u64,
     available: u64,
     removable: bool,
+    /// A network share: listed, but not preselected, because walking it is slow.
+    network: bool,
 }
 
+/// The user's disks, without the OS's own volumes, snap images and pseudo file systems.
 fn read_disks() -> Vec<DiskInfo> {
+    let platform = Platform::current();
     let mut disks: Vec<DiskInfo> = Disks::new_with_refreshed_list()
         .iter()
         .filter(|d| d.total_space() > 0)
-        .map(|d| DiskInfo {
-            mount: d.mount_point().to_string_lossy().into_owned(),
-            name: d.name().to_string_lossy().into_owned(),
-            total: d.total_space(),
-            available: d.available_space(),
-            removable: d.is_removable(),
+        .filter_map(|d| {
+            let mount = d.mount_point().to_string_lossy().into_owned();
+            let kind = platform.disk_kind(&mount, &d.file_system().to_string_lossy());
+            (kind != DiskKind::Hidden).then(|| DiskInfo {
+                mount,
+                name: d.name().to_string_lossy().into_owned(),
+                total: d.total_space(),
+                available: d.available_space(),
+                removable: d.is_removable(),
+                network: kind == DiskKind::Network,
+            })
         })
         .collect();
     disks.sort_by(|a, b| a.mount.cmp(&b.mount));
@@ -63,6 +74,12 @@ fn read_disks() -> Vec<DiskInfo> {
 #[tauri::command]
 fn list_disks() -> Vec<DiskInfo> {
     read_disks()
+}
+
+/// Which OS this is, and its names for the trash and file manager.
+#[tauri::command]
+fn platform_info() -> PlatformInfo {
+    Platform::current().info()
 }
 
 /// Starts a scan on a background thread. Replaces any earlier session, so only
@@ -78,7 +95,7 @@ fn start_scan(roots: Vec<String>, on_event: Channel<ScanEvent>, state: State<'_,
 
     std::thread::spawn(move || {
         let mounts: Vec<String> = read_disks().into_iter().map(|d| d.mount).collect();
-        scanner::run(&session, roots, &mounts, |event| {
+        scanner::run(&session, roots, &mounts, &Policy::current(), |event| {
             let _ = on_event.send(event);
         });
     });
@@ -136,6 +153,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             list_disks,
+            platform_info,
             start_scan,
             cancel_scan,
             clear_scan,

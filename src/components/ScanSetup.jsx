@@ -14,6 +14,7 @@ function DiskOption({ disk, checked, onToggle }) {
           <span className="truncate text-sm font-semibold">
             {disk.mount}
             {disk.name && <span className="ml-2 font-medium text-ink-faint">{disk.name}</span>}
+            {disk.network && <span className="ml-2 font-medium text-ink-faint">· Network, slow to scan</span>}
           </span>
           <span className="shrink-0 font-secondary text-xs text-ink-muted">
             {formatBytes(disk.available)} free of {formatBytes(disk.total)}

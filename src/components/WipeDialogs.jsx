@@ -3,7 +3,7 @@ import { CATEGORIES, CATEGORY_KEYS } from "../lib/categories";
 import { formatBytes, plural } from "../lib/format";
 import { Button, Dot, Modal, PathText } from "./ui";
 
-export function ConfirmDialog({ items, onCancel, onConfirm }) {
+export function ConfirmDialog({ items, trashName, onCancel, onConfirm }) {
   const totalBytes = items.reduce((sum, item) => sum + item.size, 0);
   const flagged = items.filter((item) => item.note);
   const byCategory = CATEGORY_KEYS.map((key) => {
@@ -18,7 +18,7 @@ export function ConfirmDialog({ items, onCancel, onConfirm }) {
         <h2 className="text-xl font-bold">Permanently delete {plural(items.length, "item")}?</h2>
         <p className="mt-2 text-sm leading-relaxed text-ink-muted">
           This frees about <span className="font-secondary font-semibold text-primary">{formatBytes(totalBytes)}</span>.
-          Files skip the Recycle Bin and can't be restored, though you can regenerate them with the commands below.
+          Files skip the {trashName} and can't be restored, though you can regenerate them with the commands below.
         </p>
 
         <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
