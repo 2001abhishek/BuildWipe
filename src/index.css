@@ -34,8 +34,8 @@
   --color-secondary-hover: oklch(0.8 0.1 265);
 
   /* Status. */
-  --color-danger: oklch(0.63 0.2 25);
-  --color-danger-hover: oklch(0.69 0.19 25);
+  --color-danger: oklch(0.56 0.2 25);
+  --color-danger-hover: oklch(0.52 0.19 25);
   --color-on-danger: oklch(0.98 0.01 25);
   --color-warning: oklch(0.83 0.14 80);
 
@@ -51,10 +51,63 @@
   --color-eco-terraform: oklch(0.65 0.17 275);
   --color-eco-junk: oklch(0.66 0.014 260);
 
+  /* Space in use on a disk meter, and the dimming behind dialogs. */
+  --color-used: oklch(0.32 0.018 260);
+  --color-scrim: oklch(0.12 0.014 260 / 0.8);
+
   /* The headline reclaimable figure. */
   --text-display: 3.25rem;
   --text-display--line-height: 1;
   --text-display--letter-spacing: -0.04em;
+}
+
+/*
+ * Light palette. The values in @theme above are the dark palette and the
+ * default. `src/lib/theme.js` sets data-theme on <html> from the user's choice,
+ * resolving "System" to light or dark, and these overrides take over for light.
+ * Same token names, so components never need to know which theme is active.
+ */
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-canvas: oklch(0.965 0.005 260);
+  --color-surface: oklch(0.995 0.002 260);
+  --color-raised: oklch(0.935 0.007 260);
+  --color-line: oklch(0.885 0.009 260);
+
+  --color-ink: oklch(0.22 0.02 260);
+  --color-ink-muted: oklch(0.42 0.02 260);
+  --color-ink-faint: oklch(0.52 0.018 260);
+
+  --color-primary: oklch(0.5 0.11 165);
+  --color-primary-hover: oklch(0.45 0.1 165);
+  --color-on-primary: oklch(0.99 0.01 165);
+
+  --color-secondary: oklch(0.52 0.15 265);
+  --color-secondary-hover: oklch(0.46 0.15 265);
+
+  --color-danger: oklch(0.56 0.2 25);
+  --color-danger-hover: oklch(0.5 0.19 25);
+  --color-on-danger: oklch(0.99 0.01 25);
+  --color-warning: oklch(0.5 0.11 70);
+
+  --color-eco-node: oklch(0.64 0.17 145);
+  --color-eco-rust: oklch(0.62 0.17 45);
+  --color-eco-python: oklch(0.72 0.15 90);
+  --color-eco-jvm: oklch(0.58 0.19 15);
+  --color-eco-dotnet: oklch(0.55 0.2 295);
+  --color-eco-mobile: oklch(0.6 0.14 230);
+  --color-eco-vendor: oklch(0.6 0.18 340);
+  --color-eco-game: oklch(0.62 0.11 190);
+  --color-eco-terraform: oklch(0.55 0.18 275);
+  --color-eco-junk: oklch(0.6 0.014 260);
+
+  --color-used: oklch(0.78 0.012 260);
+  --color-scrim: oklch(0.25 0.02 260 / 0.35);
 }
 
 @layer base {
@@ -66,7 +119,6 @@
 
   body {
     @apply bg-canvas font-primary text-ink select-none antialiased;
-    color-scheme: dark;
     overflow: hidden;
   }
 

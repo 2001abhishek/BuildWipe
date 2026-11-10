@@ -75,7 +75,7 @@ export function Modal({ title, onClose, children }) {
         event.preventDefault();
         onClose?.();
       }}
-      className="m-auto max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-line bg-surface p-6 text-ink backdrop:bg-canvas/80"
+      className="m-auto max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-line bg-surface p-6 text-ink backdrop:bg-scrim"
     >
       {children}
     </dialog>

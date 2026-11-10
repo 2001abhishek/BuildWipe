@@ -39,7 +39,7 @@ export function ScanSetup({ disks, chosenDisks, folders, onToggleDisk, onAddFold
           </h1>
           <p className="mt-4 text-base leading-relaxed text-ink-muted">
             BuildWipe looks through your disks for dependency folders and build output left behind by your projects,
-            then shows what you'd get back. Nothing is deleted until you select it and confirm.
+            then shows what you'd get back.
           </p>
           <div className="mt-8">
             <Button variant="primary" className="px-6 py-3 text-base" disabled={!hasScope} onClick={onStart}>
@@ -47,11 +47,11 @@ export function ScanSetup({ disks, chosenDisks, folders, onToggleDisk, onAddFold
               Start scan
             </Button>
           </div>
-          <p className="mt-8 flex gap-2.5 text-sm leading-relaxed text-ink-faint">
+          {/* <p className="mt-8 flex gap-2.5 text-sm leading-relaxed text-ink-faint">
             <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden />
             Always skipped: Windows, Program Files, ProgramData, AppData, installed apps, and hidden folders such as
             .cargo. Ambiguous names like target or bin only match next to the project file that explains them.
-          </p>
+          </p> */}
         </section>
 
         <section className="flex min-w-0 flex-col gap-6">

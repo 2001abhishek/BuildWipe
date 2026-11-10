@@ -3,9 +3,11 @@ import { BrushCleaning, RotateCcw } from "lucide-react";
 import { ReclaimPanel } from "./components/ReclaimPanel";
 import { ResultsPane } from "./components/ResultsPane";
 import { ScanSetup } from "./components/ScanSetup";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { Button } from "./components/ui";
 import { ConfirmDialog, WipeDialog } from "./components/WipeDialogs";
 import { useScan } from "./hooks/useScan";
+import { useTheme } from "./hooks/useTheme";
 import { useWipe } from "./hooks/useWipe";
 import { listDisks, pickFolder } from "./lib/api";
 import { bulkPaths, filterItems, groupByProject, summarize } from "./lib/results";
@@ -15,6 +17,7 @@ const INITIAL_FILTERS = { search: "", category: null, olderThanDays: 0, sort: "s
 export default function App() {
   const scan = useScan();
   const { removeItem, shrinkItem } = scan;
+  const [themePreference, setThemePreference] = useTheme();
 
   const [disks, setDisks] = useState([]);
   const [chosenDisks, setChosenDisks] = useState(() => new Set());
@@ -131,12 +134,15 @@ export default function App() {
           <span className="text-lg font-extrabold tracking-tight">BuildWipe</span>
           <span className="text-sm text-ink-faint">Clean developer build leftovers</span>
         </div>
-        {scan.phase === "done" && (
-          <Button onClick={backToSetup}>
-            <RotateCcw className="size-4" aria-hidden />
-            New scan
-          </Button>
-        )}
+        <div className="flex items-center gap-3">
+          {scan.phase === "done" && (
+            <Button onClick={backToSetup}>
+              <RotateCcw className="size-4" aria-hidden />
+              New scan
+            </Button>
+          )}
+          <ThemeToggle value={themePreference} onChange={setThemePreference} />
+        </div>
       </header>
 
       {scan.phase === "idle" ? (

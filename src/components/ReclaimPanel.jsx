@@ -25,7 +25,7 @@ function DiskMeter({ disk, found, selected }) {
         role="img"
         aria-label={`${formatBytes(found)} reclaimable on ${disk.mount}, ${formatBytes(selected)} selected`}
       >
-        <div className="h-full bg-line" style={{ width: `${percent(otherUsed, disk.total)}%` }} />
+        <div className="h-full bg-used" style={{ width: `${percent(otherUsed, disk.total)}%` }} />
         <div className="h-full bg-secondary" style={{ width: `${percent(found - selected, disk.total)}%` }} />
         <div className="h-full bg-primary" style={{ width: `${percent(selected, disk.total)}%` }} />
       </div>
@@ -155,7 +155,7 @@ export function ReclaimPanel({ scan, disks, summary, selected, activeCategory, o
               <DiskMeter key={disk.mount} disk={disk} {...summary.byMount.get(disk.mount)} />
             ))}
             <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-faint">
-              <li className="flex items-center gap-1.5"><Dot className="bg-line" />In use</li>
+              <li className="flex items-center gap-1.5"><Dot className="bg-used" />In use</li>
               <li className="flex items-center gap-1.5"><Dot className="bg-secondary" />Reclaimable</li>
               <li className="flex items-center gap-1.5"><Dot className="bg-primary" />Selected</li>
             </ul>
