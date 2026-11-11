@@ -32,17 +32,19 @@ export function ScanSetup({ disks, chosenDisks, folders, onToggleDisk, onAddFold
   const hasScope = chosenDisks.size > 0 || folders.length > 0;
 
   return (
-    <main className="flex min-h-0 flex-1 justify-center overflow-y-auto px-8 py-10">
-      <div className="grid w-full max-w-5xl grid-cols-2 gap-12 self-center">
+    // `my-auto` centres the content vertically, and unlike align-self it lets a
+    // short window scroll to the top instead of cutting the top off.
+    <main className="flex min-h-0 flex-1 justify-center overflow-y-auto px-6 py-8 lg:px-8 lg:py-10">
+      <div className="my-auto grid w-full max-w-5xl grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-12">
         <section className="flex flex-col justify-center">
-          <h1 className="text-4xl leading-tight font-extrabold tracking-tight text-balance">
+          <h1 className="text-3xl leading-tight font-extrabold tracking-tight text-balance lg:text-4xl">
             See how much space your old builds are holding.
           </h1>
           <p className="mt-4 text-base leading-relaxed text-ink-muted">
             BuildWipe looks through your disks for dependency folders and build output left behind by your projects,
             then shows what you'd get back.
           </p>
-          <div className="mt-8">
+          <div className="mt-6 lg:mt-8">
             <Button variant="primary" className="px-6 py-3 text-base" disabled={!hasScope} onClick={onStart}>
               <Radar className="size-5" aria-hidden />
               Start scan

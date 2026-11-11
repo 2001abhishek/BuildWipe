@@ -131,11 +131,11 @@ export function ReclaimPanel({ scan, disks, summary, selected, activeCategory, o
   );
 
   return (
-    <aside className="flex w-88 shrink-0 flex-col border-r border-line bg-canvas">
-      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-5">
+    <aside className="flex w-64 shrink-0 flex-col border-r border-line bg-canvas lg:w-80 xl:w-88">
+      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 xl:gap-6 xl:p-5">
         <section>
           <SectionLabel>Space you can reclaim</SectionLabel>
-          <p className="mt-2.5 font-secondary text-display font-semibold text-primary">
+          <p className="mt-2.5 font-secondary text-4xl font-semibold tracking-tight text-primary xl:text-display">
             {formatBytes(summary.total)}
           </p>
           <p className="mt-2 text-sm text-ink-muted">
@@ -183,10 +183,10 @@ export function ReclaimPanel({ scan, disks, summary, selected, activeCategory, o
         )}
       </div>
 
-      <div className="border-t border-line p-4">
+      <div className="border-t border-line p-3 xl:p-4">
         <Button
           variant="danger"
-          className="w-full py-3"
+          className="w-full py-3 whitespace-nowrap"
           disabled={summary.selectedCount === 0 || scan.phase === "scanning"}
           onClick={onWipe}
         >

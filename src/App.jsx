@@ -138,16 +138,16 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex shrink-0 items-center justify-between border-b border-line bg-surface px-5 py-3">
-        <div className="flex items-center gap-2.5">
-          <BrushCleaning className="size-6 text-primary" aria-hidden />
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-4 py-3 lg:px-5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <BrushCleaning className="size-6 shrink-0 text-primary" aria-hidden />
           <span className="text-lg font-extrabold tracking-tight">BuildWipe</span>
-          <span className="text-sm text-ink-faint">Clean developer build leftovers</span>
+          <span className="hidden truncate text-sm text-ink-faint lg:inline">Clean developer build leftovers</span>
           {updater.version && (
             <span className="font-secondary text-xs text-ink-faint">v{updater.version}</span>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 lg:gap-3">
           <UpdateButton updater={updater} onOpen={() => setIsUpdateOpen(true)} />
           {scan.phase === "done" && (
             <Button onClick={backToSetup}>

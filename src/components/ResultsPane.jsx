@@ -56,7 +56,7 @@ function ProjectRow({ group, isExpanded, selected, onToggleExpand, onBulk }) {
         </div>
         <PathText path={group.path} className="text-xs text-ink-faint" />
       </div>
-      <span className="w-28 shrink-0 text-right text-xs text-ink-muted">{formatAge(group.modified)}</span>
+      <span className="hidden w-28 shrink-0 text-right text-xs text-ink-muted lg:block">{formatAge(group.modified)}</span>
       <span className="w-20 shrink-0 text-right font-secondary text-sm font-semibold">{formatBytes(group.size)}</span>
       <span className="w-7 shrink-0" />
     </div>
@@ -71,7 +71,7 @@ function ItemRow({ item, isSelected, fileManager, onToggle }) {
       <Dot className={meta.dot} />
       <PathText path={item.path} display={relativePath(item)} className="flex-1 text-xs text-ink-muted" />
       {item.note && <ReviewBadge title={item.note} />}
-      <span className="w-28 shrink-0 text-right text-xs text-ink-faint">{formatAge(item.modified)}</span>
+      <span className="hidden w-28 shrink-0 text-right text-xs text-ink-faint lg:block">{formatAge(item.modified)}</span>
       <span className="w-20 shrink-0 text-right font-secondary text-xs text-ink-muted">{formatBytes(item.size)}</span>
       <button
         type="button"
@@ -93,7 +93,7 @@ function Toolbar({ filters, setFilters, visibleItems, selected, onBulk }) {
     "rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-ink-muted hover:bg-raised";
 
   return (
-    <div className="flex items-center gap-3 border-b border-line px-4 py-3">
+    <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3 lg:gap-3">
       <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs font-semibold text-ink-muted">
         <Checkbox
           checked={state.checked}
@@ -105,7 +105,7 @@ function Toolbar({ filters, setFilters, visibleItems, selected, onBulk }) {
         Select all
       </label>
 
-      <div className="relative min-w-0 flex-1">
+      <div className="relative min-w-40 flex-1">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-faint" aria-hidden />
         <input
           type="search"

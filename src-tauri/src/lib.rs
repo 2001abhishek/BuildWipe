@@ -2,6 +2,7 @@ mod platform;
 mod rules;
 mod scanner;
 mod wipe;
+mod window;
 
 use platform::{DiskKind, Platform, PlatformInfo, Policy};
 use scanner::{ScanEvent, Session};
@@ -10,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use sysinfo::Disks;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{Manager, State};
 use wipe::WipeEvent;
 
 #[derive(Default)]
@@ -156,6 +157,9 @@ pub fn run() {
             {
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.handle().plugin(tauri_plugin_process::init())?;
+            }
+            if let Some(main) = app.get_webview_window("main") {
+                window::show_fitted(&main);
             }
             Ok(())
         })
