@@ -1,3 +1,5 @@
+mod caches;
+mod containers;
 mod platform;
 mod rules;
 mod scanner;
@@ -5,7 +7,7 @@ mod wipe;
 mod window;
 
 use platform::{DiskKind, Platform, PlatformInfo, Policy};
-use scanner::{ScanEvent, Session};
+use scanner::{Request, ScanEvent, Session};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -84,9 +86,16 @@ fn platform_info() -> PlatformInfo {
 }
 
 /// Starts a scan on a background thread. Replaces any earlier session, so only
-/// the newest results can be wiped.
+/// the newest results can be wiped. `caches` adds the developer tool caches and
+/// `containers` asks Docker and Podman what they could remove.
 #[tauri::command]
-fn start_scan(roots: Vec<String>, on_event: Channel<ScanEvent>, state: State<'_, AppState>) {
+fn start_scan(
+    roots: Vec<String>,
+    caches: bool,
+    containers: bool,
+    on_event: Channel<ScanEvent>,
+    state: State<'_, AppState>,
+) {
     let session = Arc::new(Session::default());
     if let Ok(mut current) = state.session.lock() {
         if let Some(previous) = current.replace(session.clone()) {
@@ -96,7 +105,8 @@ fn start_scan(roots: Vec<String>, on_event: Channel<ScanEvent>, state: State<'_,
 
     std::thread::spawn(move || {
         let mounts: Vec<String> = read_disks().into_iter().map(|d| d.mount).collect();
-        scanner::run(&session, roots, &mounts, &Policy::current(), |event| {
+        let request = Request { roots, caches, containers };
+        scanner::run(&session, request, &mounts, &Policy::current(), |event| {
             let _ = on_event.send(event);
         });
     });
@@ -130,7 +140,7 @@ fn start_wipe(
     }
 
     std::thread::spawn(move || {
-        wipe::run(&session, paths, &cancel, |event| {
+        wipe::run(&session, &Policy::current(), paths, &cancel, |event| {
             let _ = on_event.send(event);
         });
     });

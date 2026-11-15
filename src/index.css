@@ -50,6 +50,8 @@
   --color-eco-game: oklch(0.78 0.1 190);
   --color-eco-terraform: oklch(0.65 0.17 275);
   --color-eco-junk: oklch(0.66 0.014 260);
+  --color-eco-cache: oklch(0.76 0.08 70);
+  --color-eco-container: oklch(0.72 0.15 240);
 
   /* Space in use on a disk meter, and the dimming behind dialogs. */
   --color-used: oklch(0.32 0.018 260);
@@ -105,6 +107,8 @@
   --color-eco-game: oklch(0.62 0.11 190);
   --color-eco-terraform: oklch(0.55 0.18 275);
   --color-eco-junk: oklch(0.6 0.014 260);
+  --color-eco-cache: oklch(0.6 0.08 70);
+  --color-eco-container: oklch(0.56 0.16 240);
 
   --color-used: oklch(0.78 0.012 260);
   --color-scrim: oklch(0.25 0.02 260 / 0.35);

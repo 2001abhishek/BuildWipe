@@ -1,9 +1,14 @@
 //! Permanent deletion of items found by the latest scan.
 //!
 //! Nothing the UI sends is trusted on its own. A path must have been recorded
-//! by the scan, and must still classify as an artifact on disk right now.
+//! by the scan, and must still be what the scan said it was right now: an
+//! artifact that classifies as one on disk, or a folder at exactly one of the
+//! tool cache locations. Container items are only ids. What to remove for each
+//! was recorded by the scan, and the engine itself refuses anything in use.
 
-use crate::platform::{native, Platform};
+use crate::caches;
+use crate::containers;
+use crate::platform::{native, Cleanup, Platform, Policy};
 use crate::rules;
 use crate::scanner::{self, Session};
 use serde::Serialize;
@@ -36,24 +41,62 @@ fn remove(path: &Path) -> io::Result<()> {
     }
 }
 
-fn wipe_one(session: &Session, path_text: &str, cancel: &AtomicBool) -> Result<u64, (String, u64, u64)> {
+const NOT_SCANNED: &str = "Not part of the latest scan";
+const CHANGED: &str = "Changed since the scan, so it was left alone. Scan again to review it.";
+
+fn forget(session: &Session, path_text: &str) {
+    if let Ok(mut found) = session.found.lock() {
+        found.remove(Path::new(path_text));
+    }
+    if let Ok(mut known) = session.containers.lock() {
+        known.remove(path_text);
+    }
+}
+
+fn wipe_one(
+    session: &Session,
+    policy: &Policy,
+    path_text: &str,
+    cancel: &AtomicBool,
+) -> Result<u64, (String, u64, u64)> {
     let path = PathBuf::from(path_text);
     let refuse = |reason: &str| Err((reason.to_string(), 0, 0));
 
+    if path_text.starts_with(containers::ID_PREFIX) {
+        let target = session.containers.lock().ok().and_then(|known| known.get(path_text).cloned());
+        let Some(target) = target else { return refuse(NOT_SCANNED) };
+        return match containers::remove(&target) {
+            Ok(freed) => {
+                forget(session, path_text);
+                Ok(freed)
+            }
+            Err(reason) => Err((reason, 0, target.size)),
+        };
+    }
+
     let is_known = session.found.lock().is_ok_and(|found| found.contains(&path));
     if !is_known {
-        return refuse("Not part of the latest scan");
+        return refuse(NOT_SCANNED);
     }
-    if rules::classify_path(&path).is_none() {
-        return refuse("Changed since the scan, so it was left alone. Scan again to review it.");
+    match policy.cache_at(&path) {
+        Some(_) if !caches::is_real_dir(&path) => return refuse(CHANGED),
+        Some(dir) => {
+            if let Cleanup::OlderThanDays(days) = dir.cleanup {
+                let outcome = remove_old_entries(&path, days, cancel);
+                if outcome.is_ok() {
+                    forget(session, path_text);
+                }
+                return outcome;
+            }
+        }
+        None if rules::classify_path(&path).is_none() => return refuse(CHANGED),
+        None => {}
     }
 
     let before = scanner::measure(&path, cancel).map_or(0, |m| m.size);
     match remove(&path) {
         Ok(()) => {
-            if let Ok(mut found) = session.found.lock() {
-                found.remove(&path);
-            }
+            forget(session, path_text);
             Ok(before)
         }
         Err(error) => {
@@ -66,9 +109,45 @@ fn wipe_one(session: &Session, path_text: &str, cancel: &AtomicBool) -> Result<u
     }
 }
 
+/// Removes what has been untouched for `days` days from a folder like Temp.
+/// Entries a program still holds open are skipped, which is expected there,
+/// so this only fails when nothing at all could be removed.
+fn remove_old_entries(dir: &Path, days: u64, cancel: &AtomicBool) -> Result<u64, (String, u64, u64)> {
+    let entries = caches::old_entries(dir, days, cancel).unwrap_or_default();
+    let mut freed = 0;
+    let mut first_error = None;
+    let mut removed_any = false;
+    for (entry, measured) in &entries {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        match remove(entry) {
+            Ok(()) => {
+                removed_any = true;
+                freed += measured.size;
+            }
+            Err(error) => {
+                // A partly removed folder still freed some space.
+                let never = AtomicBool::new(false);
+                let left = scanner::measure(entry, &never).map_or(0, |m| m.size);
+                freed += measured.size.saturating_sub(left);
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    match first_error {
+        Some(error) if !removed_any && freed == 0 => {
+            let remaining = entries.iter().map(|(_, m)| m.size).sum();
+            Err((Platform::current().describe(&error), 0, remaining))
+        }
+        _ => Ok(freed),
+    }
+}
+
 /// Deletes `paths`, blocking until done or cancelled.
 pub fn run(
     session: &Session,
+    policy: &Policy,
     paths: Vec<String>,
     cancel: &AtomicBool,
     send: impl Fn(WipeEvent) + Sync,
@@ -85,7 +164,7 @@ pub fn run(
                 let Some(path) = paths.get(next.fetch_add(1, Ordering::Relaxed)) else {
                     return;
                 };
-                let outcome = wipe_one(session, path, cancel);
+                let outcome = wipe_one(session, policy, path, cancel);
                 let mut totals = totals.lock().unwrap_or_else(|e| e.into_inner());
                 match outcome {
                     Ok(freed) => {
@@ -115,7 +194,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::Policy;
+    use crate::platform::Os;
 
     fn touch(root: &Path, relative: &str, bytes: usize) {
         let path = root.join(relative);
@@ -123,17 +202,34 @@ mod tests {
         fs::write(path, vec![0u8; bytes]).unwrap();
     }
 
+    fn no_home() -> Policy {
+        Policy::new(Platform::current(), None)
+    }
+
     fn scanned(root: &Path) -> Session {
         let session = Session::default();
         let roots = vec![root.to_string_lossy().into_owned()];
-        scanner::run(&session, roots, &[], &Policy::new(Platform::current(), None), |_| {});
+        let request = scanner::Request { roots, caches: false, containers: false };
+        scanner::run(&session, request, &[], &no_home(), |_| {});
         session
     }
 
     fn wipe(session: &Session, paths: Vec<String>) -> Vec<WipeEvent> {
+        wipe_as(session, &no_home(), paths)
+    }
+
+    fn wipe_as(session: &Session, policy: &Policy, paths: Vec<String>) -> Vec<WipeEvent> {
         let events = Mutex::new(Vec::new());
-        run(session, paths, &AtomicBool::new(false), |e| events.lock().unwrap().push(e));
+        run(session, policy, paths, &AtomicBool::new(false), |e| events.lock().unwrap().push(e));
         events.into_inner().unwrap()
+    }
+
+    /// A scan of only the tool caches under a throwaway home folder.
+    fn scanned_caches(policy: &Policy) -> Session {
+        let session = Session::default();
+        let request = scanner::Request { roots: Vec::new(), caches: true, containers: false };
+        scanner::run(&session, request, &[], policy, |_| {});
+        session
     }
 
     fn text(path: PathBuf) -> String {
@@ -313,6 +409,7 @@ mod tests {
         let events = Mutex::new(Vec::new());
         run(
             &session,
+            &no_home(),
             vec![text(root.join("app/node_modules"))],
             &AtomicBool::new(true),
             |e| events.lock().unwrap().push(e),
@@ -323,5 +420,81 @@ mod tests {
             events.into_inner().unwrap().last(),
             Some(WipeEvent::Finished { cancelled: true, removed: 0, .. })
         ));
+    }
+
+    #[test]
+    fn removes_a_whole_tool_cache_and_nothing_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        touch(home, ".npm/_cacache/index-v5/a", 100);
+        touch(home, ".npm/_logs/keep.log", 5);
+        touch(home, ".npm/_npx/abc/package.json", 5);
+        let policy = Policy::new(Platform::for_os(Os::Linux), Some(home.to_path_buf()));
+
+        let session = scanned_caches(&policy);
+        let events = wipe_as(&session, &policy, vec![text(home.join(".npm").join("_cacache"))]);
+
+        assert!(!home.join(".npm/_cacache").exists());
+        assert!(home.join(".npm/_logs/keep.log").exists());
+        assert!(home.join(".npm/_npx/abc/package.json").exists(), "an unselected cache was removed");
+        assert!(matches!(events.last(), Some(WipeEvent::Finished { removed: 1, failed: 0, freed: 100, .. })));
+    }
+
+    #[test]
+    fn refuses_a_cache_folder_the_scan_never_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let policy = Policy::new(Platform::for_os(Os::Linux), Some(home.to_path_buf()));
+        let session = scanned_caches(&policy);
+        // Created after the scan, so the session has no record of it.
+        touch(home, ".npm/_cacache/index-v5/a", 100);
+
+        let events = wipe_as(&session, &policy, vec![text(home.join(".npm").join("_cacache"))]);
+
+        assert!(home.join(".npm/_cacache/index-v5/a").exists());
+        assert!(matches!(events[0], WipeEvent::Failed { .. }));
+    }
+
+    #[test]
+    fn a_cache_replaced_by_a_link_after_the_scan_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        touch(&home, ".npm/_cacache/index-v5/a", 100);
+        touch(dir.path(), "precious/keep.txt", 5);
+        let policy = Policy::new(Platform::for_os(Os::Linux), Some(home.clone()));
+        let session = scanned_caches(&policy);
+
+        let cache = home.join(".npm").join("_cacache");
+        fs::remove_dir_all(&cache).unwrap();
+        scanner::tests::link_dir(&dir.path().join("precious"), &cache);
+        let events = wipe_as(&session, &policy, vec![text(cache)]);
+
+        assert!(dir.path().join("precious/keep.txt").exists());
+        assert!(matches!(events[0], WipeEvent::Failed { .. }));
+    }
+
+    #[test]
+    fn temp_cleanup_removes_only_what_is_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let old = caches::tests::touch(home, "AppData/Local/Temp/old-installer.tmp", 100);
+        caches::tests::age(&old, 30);
+        let fresh = caches::tests::touch(home, "AppData/Local/Temp/in-use-now.tmp", 7);
+        let policy = Policy::new(Platform::for_os(Os::Windows), Some(home.to_path_buf()));
+        let temp = home.join("AppData").join("Local").join("Temp");
+
+        let session = scanned_caches(&policy);
+        let events = wipe_as(&session, &policy, vec![text(temp.clone())]);
+
+        assert!(!old.exists());
+        assert!(fresh.exists(), "a recent temporary file was removed");
+        assert!(temp.is_dir(), "the Temp folder itself was removed");
+        assert!(matches!(events.last(), Some(WipeEvent::Finished { removed: 1, failed: 0, freed: 100, .. })));
+    }
+
+    #[test]
+    fn refuses_a_container_id_the_scan_never_found() {
+        let events = wipe(&Session::default(), vec!["container://docker/image/sha256:abc".to_string()]);
+        assert!(matches!(&events[0], WipeEvent::Failed { error, .. } if error == NOT_SCANNED));
     }
 }

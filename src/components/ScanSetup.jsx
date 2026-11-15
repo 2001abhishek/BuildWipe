@@ -1,5 +1,5 @@
-import { FolderPlus, HardDrive, Radar, ShieldCheck, X } from "lucide-react";
-import { CATEGORIES, CATEGORY_KEYS } from "../lib/categories";
+import { Container, FolderPlus, HardDrive, Package, Radar, X } from "lucide-react";
+import { CATEGORIES, PROJECT_CATEGORY_KEYS } from "../lib/categories";
 import { formatBytes } from "../lib/format";
 import { Button, Checkbox, Dot, SectionLabel } from "./ui";
 
@@ -28,8 +28,47 @@ function DiskOption({ disk, checked, onToggle }) {
   );
 }
 
-export function ScanSetup({ disks, chosenDisks, folders, onToggleDisk, onAddFolder, onRemoveFolder, onStart }) {
-  const hasScope = chosenDisks.size > 0 || folders.length > 0;
+const EXTRAS = [
+  {
+    key: "caches",
+    icon: Package,
+    title: "Developer tool caches",
+    description: "Downloads kept by npm, Cargo, pip, Gradle, NuGet and more, plus week-old temporary files",
+  },
+  {
+    key: "containers",
+    icon: Container,
+    title: "Docker and Podman",
+    description: "Unused images, stopped containers and build cache. Volumes are never touched.",
+  },
+];
+
+function ExtraOption({ option, checked, onToggle }) {
+  const Icon = option.icon;
+  return (
+    <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3 transition-colors hover:bg-raised">
+      <Checkbox checked={checked} label={`Include ${option.title}`} onChange={onToggle} />
+      <Icon className="size-5 shrink-0 text-ink-faint" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold">{option.title}</div>
+        <div className="mt-0.5 text-xs leading-relaxed text-ink-faint">{option.description}</div>
+      </div>
+    </label>
+  );
+}
+
+export function ScanSetup({
+  disks,
+  chosenDisks,
+  folders,
+  extras,
+  onToggleExtra,
+  onToggleDisk,
+  onAddFolder,
+  onRemoveFolder,
+  onStart,
+}) {
+  const hasScope = chosenDisks.size > 0 || folders.length > 0 || extras.caches || extras.containers;
 
   return (
     // `my-auto` centres the content vertically, and unlike align-self it lets a
@@ -42,7 +81,7 @@ export function ScanSetup({ disks, chosenDisks, folders, onToggleDisk, onAddFold
           </h1>
           <p className="mt-4 text-base leading-relaxed text-ink-muted">
             BuildWipe looks through your disks for dependency folders and build output left behind by your projects,
-            then shows what you'd get back.
+            along with the caches your tools and containers pile up, then shows what you'd get back.
           </p>
           <div className="mt-6 lg:mt-8">
             <Button variant="primary" className="px-6 py-3 text-base" disabled={!hasScope} onClick={onStart}>
@@ -93,9 +132,21 @@ export function ScanSetup({ disks, chosenDisks, folders, onToggleDisk, onAddFold
           </div>
 
           <div className="flex flex-col gap-2.5">
-            <SectionLabel>What it looks for</SectionLabel>
+            <SectionLabel>Also clean up</SectionLabel>
+            {EXTRAS.map((option) => (
+              <ExtraOption
+                key={option.key}
+                option={option}
+                checked={extras[option.key]}
+                onToggle={() => onToggleExtra(option.key)}
+              />
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-2.5">
+            <SectionLabel>What it looks for in projects</SectionLabel>
             <ul className="grid grid-cols-2 gap-x-6 gap-y-2.5">
-              {CATEGORY_KEYS.map((key) => (
+              {PROJECT_CATEGORY_KEYS.map((key) => (
                 <li key={key} className="min-w-0">
                   <div className="flex items-center gap-2 text-sm font-semibold">
                     <Dot className={CATEGORIES[key].dot} />

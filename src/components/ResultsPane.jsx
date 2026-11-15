@@ -4,7 +4,7 @@ import { ChevronRight, FolderOpen, PartyPopper, Search, SearchX, TriangleAlert, 
 import { reveal } from "../lib/api";
 import { CATEGORIES } from "../lib/categories";
 import { formatAge, formatBytes, plural } from "../lib/format";
-import { bulkState, relativePath } from "../lib/results";
+import { bulkState, hasPath, relativePath } from "../lib/results";
 import { Checkbox, Dot, PathText } from "./ui";
 
 const PROJECT_ROW_HEIGHT = 58;
@@ -27,7 +27,7 @@ function ProjectRow({ group, isExpanded, selected, onToggleExpand, onBulk }) {
   return (
     <div
       className="flex h-full cursor-pointer items-center gap-3 border-b border-line/60 px-4 transition-colors hover:bg-raised/50"
-      onClick={() => onToggleExpand(group.path)}
+      onClick={() => onToggleExpand(group.key)}
     >
       <Checkbox
         checked={state.checked}
@@ -63,25 +63,48 @@ function ProjectRow({ group, isExpanded, selected, onToggleExpand, onBulk }) {
   );
 }
 
+/** A cache or container: what it is first, then its path or a short description. */
+function LabelledName({ item }) {
+  return (
+    <span className="flex min-w-0 flex-1 items-baseline gap-2" title={item.detail ?? item.path}>
+      <span className="max-w-1/2 shrink-0 truncate text-xs font-semibold text-ink">{item.label}</span>
+      {item.detail ? (
+        <span className="min-w-0 truncate text-xs text-ink-faint">{item.detail}</span>
+      ) : (
+        <PathText path={item.path} display={relativePath(item)} className="text-xs text-ink-faint" />
+      )}
+    </span>
+  );
+}
+
 function ItemRow({ item, isSelected, fileManager, onToggle }) {
   const meta = CATEGORIES[item.category];
+  const name = item.label ?? item.path;
   return (
     <div className="group flex h-full items-center gap-3 border-b border-line/40 bg-surface/40 pr-4 pl-11 text-sm">
-      <Checkbox checked={isSelected} label={`Select ${item.path}`} onChange={() => onToggle(item.path)} />
+      <Checkbox checked={isSelected} label={`Select ${name}`} onChange={() => onToggle(item.path)} />
       <Dot className={meta.dot} />
-      <PathText path={item.path} display={relativePath(item)} className="flex-1 text-xs text-ink-muted" />
+      {item.label ? (
+        <LabelledName item={item} />
+      ) : (
+        <PathText path={item.path} display={relativePath(item)} className="flex-1 text-xs text-ink-muted" />
+      )}
       {item.note && <ReviewBadge title={item.note} />}
       <span className="hidden w-28 shrink-0 text-right text-xs text-ink-faint lg:block">{formatAge(item.modified)}</span>
       <span className="w-20 shrink-0 text-right font-secondary text-xs text-ink-muted">{formatBytes(item.size)}</span>
-      <button
-        type="button"
-        aria-label={`Show ${item.path} in ${fileManager}`}
-        title={`Show in ${fileManager}`}
-        className="w-7 shrink-0 rounded p-1 text-ink-faint opacity-0 group-hover:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100"
-        onClick={() => reveal(item.path)}
-      >
-        <FolderOpen className="size-4" aria-hidden />
-      </button>
+      {hasPath(item) ? (
+        <button
+          type="button"
+          aria-label={`Show ${item.path} in ${fileManager}`}
+          title={`Show in ${fileManager}`}
+          className="w-7 shrink-0 rounded p-1 text-ink-faint opacity-0 group-hover:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100"
+          onClick={() => reveal(item.path)}
+        >
+          <FolderOpen className="size-4" aria-hidden />
+        </button>
+      ) : (
+        <span className="w-7 shrink-0" />
+      )}
     </div>
   );
 }
@@ -169,10 +192,10 @@ export function ResultsPane({ scan, groups, visibleItems, filters, setFilters, s
   const [expanded, setExpanded] = useState(() => new Set());
   const scrollRef = useRef(null);
 
-  const toggleExpand = useCallback((path) => {
+  const toggleExpand = useCallback((key) => {
     setExpanded((current) => {
       const next = new Set(current);
-      if (!next.delete(path)) next.add(path);
+      if (!next.delete(key)) next.add(key);
       return next;
     });
   }, []);
@@ -180,8 +203,8 @@ export function ResultsPane({ scan, groups, visibleItems, filters, setFilters, s
   const rows = useMemo(() => {
     const flat = [];
     for (const group of groups) {
-      flat.push({ key: `p:${group.path}`, group });
-      if (expanded.has(group.path)) {
+      flat.push({ key: `p:${group.key}`, group });
+      if (expanded.has(group.key)) {
         for (const item of group.items) flat.push({ key: `i:${item.path}`, item });
       }
     }
@@ -205,7 +228,7 @@ export function ResultsPane({ scan, groups, visibleItems, filters, setFilters, s
     } else if (!scan.error) {
       empty = (
         <EmptyState icon={PartyPopper} title="Nothing left to clean">
-          BuildWipe found no build artifacts in the places it looked.
+          BuildWipe found nothing to remove in the places it looked.
         </EmptyState>
       );
     }
@@ -234,7 +257,7 @@ export function ResultsPane({ scan, groups, visibleItems, filters, setFilters, s
                   {entry.group ? (
                     <ProjectRow
                       group={entry.group}
-                      isExpanded={expanded.has(entry.group.path)}
+                      isExpanded={expanded.has(entry.group.key)}
                       selected={selected}
                       onToggleExpand={toggleExpand}
                       onBulk={onBulk}

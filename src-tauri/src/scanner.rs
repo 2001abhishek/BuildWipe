@@ -1,9 +1,11 @@
 //! Parallel filesystem walk that streams matched artifacts to the UI.
 
+use crate::caches::{self, Located};
+use crate::containers::{self, Target};
 use crate::platform::Policy;
 use crate::rules::{self, Category, Listing};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,6 +16,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 const WALK_THREADS: usize = 8;
 const BATCH_INTERVAL: Duration = Duration::from_millis(150);
 const LOOSE_JUNK_GROUP: &str = "Loose OS junk";
+const CACHE_GROUP: &str = "Developer tool caches";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +32,10 @@ pub struct Item {
     pub modified: u64,
     pub mount: String,
     pub note: Option<&'static str>,
+    /// A readable name, for items better described by what they are than by their path.
+    pub label: Option<String>,
+    /// A short description shown instead of the path, for items without one.
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,6 +43,8 @@ pub struct Item {
 pub enum ScanEvent {
     Found { items: Vec<Item> },
     Progress { dirs: u64, current: String },
+    /// Something the user should know about the scan, such as Docker not running.
+    Notice { message: String },
     Finished { cancelled: bool, dirs: u64, unreadable: u64, elapsed_ms: u64 },
 }
 
@@ -45,6 +54,21 @@ pub enum ScanEvent {
 pub struct Session {
     pub cancel: AtomicBool,
     pub found: Mutex<HashSet<PathBuf>>,
+    /// What the wipe asks Docker or Podman to do for each container item id.
+    pub containers: Mutex<HashMap<String, Target>>,
+}
+
+/// What one scan covers.
+pub struct Request {
+    pub roots: Vec<String>,
+    pub caches: bool,
+    pub containers: bool,
+}
+
+/// What the walk and the container listing hand to the collector.
+enum Found {
+    Item(Item),
+    Notice(String),
 }
 
 #[derive(Default)]
@@ -55,6 +79,12 @@ pub struct Measure {
 }
 
 impl Measure {
+    pub fn add(&mut self, other: &Measure) {
+        self.size += other.size;
+        self.files += other.files;
+        self.modified = self.modified.max(other.modified);
+    }
+
     fn include(&mut self, meta: &fs::Metadata) {
         if !meta.is_dir() {
             self.size += meta.len();
@@ -132,8 +162,9 @@ struct Walk<'a> {
     counters: &'a Counters,
     mounts: &'a [String],
     policy: &'a Policy,
-    roots: HashSet<PathBuf>,
-    tx: Sender<Item>,
+    /// Other roots and the tool caches, which are reported on their own.
+    step_around: HashSet<PathBuf>,
+    tx: Sender<Found>,
 }
 
 impl Walk<'_> {
@@ -168,7 +199,7 @@ impl Walk<'_> {
             other => other.unwrap_or_default().to_string(),
         };
 
-        let _ = self.tx.send(Item {
+        let _ = self.tx.send(Found::Item(Item {
             path: path.to_string_lossy().into_owned(),
             name,
             category,
@@ -179,7 +210,34 @@ impl Walk<'_> {
             modified: measured.modified,
             mount,
             note,
-        });
+            label: None,
+            detail: None,
+        }));
+    }
+
+    fn emit_cache(&self, cache: &Located) {
+        let Some(measured) = caches::measure_cache(&cache.path, cache.dir.cleanup, &self.session.cancel) else {
+            return;
+        };
+        // An empty cache isn't worth a row.
+        if measured.size == 0 {
+            return;
+        }
+        let home = self.policy.home().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default();
+        let _ = self.tx.send(Found::Item(Item {
+            path: cache.path.to_string_lossy().into_owned(),
+            name: cache.dir.label.to_string(),
+            category: Category::ToolCache,
+            project_name: CACHE_GROUP.to_string(),
+            project_path: home,
+            size: measured.size,
+            files: measured.files,
+            modified: measured.modified,
+            mount: self.mount_of(&cache.path),
+            note: None,
+            label: Some(cache.dir.label.to_string()),
+            detail: None,
+        }));
     }
 }
 
@@ -249,8 +307,9 @@ fn visit<'s>(
         if !kind.is_dir() {
             continue;
         }
-        // Another selected root, such as a second disk mounted inside this one, gets its own walk.
-        if walk.roots.contains(&path) {
+        // Another selected root, such as a second disk mounted inside this one,
+        // gets its own walk, and a tool cache is reported as one item.
+        if walk.step_around.contains(&path) {
             continue;
         }
 
@@ -287,7 +346,7 @@ fn unique_roots(roots: Vec<String>) -> Vec<PathBuf> {
 /// Records incoming items and forwards them to the UI in timed batches.
 fn collect(
     session: &Session,
-    rx: Receiver<Item>,
+    rx: Receiver<Found>,
     counters: &Counters,
     send: &mut (impl FnMut(ScanEvent) + Send),
 ) {
@@ -296,11 +355,15 @@ fn collect(
     loop {
         let received = rx.recv_timeout(BATCH_INTERVAL);
         let disconnected = matches!(received, Err(RecvTimeoutError::Disconnected));
-        if let Ok(item) = received {
-            if let Ok(mut found) = session.found.lock() {
-                found.insert(PathBuf::from(&item.path));
+        match received {
+            Ok(Found::Item(item)) => {
+                if let Ok(mut found) = session.found.lock() {
+                    found.insert(PathBuf::from(&item.path));
+                }
+                batch.push(item);
             }
-            batch.push(item);
+            Ok(Found::Notice(message)) => send(ScanEvent::Notice { message }),
+            Err(_) => {}
         }
         if disconnected || last_flush.elapsed() >= BATCH_INTERVAL {
             last_flush = Instant::now();
@@ -318,16 +381,22 @@ fn collect(
     }
 }
 
-/// Walks `roots`, blocking until the walk finishes or is cancelled.
+/// Walks the request's roots, measures its tool caches and asks container
+/// engines what they could remove, all at once. Blocks until everything
+/// finishes or the scan is cancelled.
 pub fn run(
     session: &Session,
-    roots: Vec<String>,
+    request: Request,
     mounts: &[String],
     policy: &Policy,
     mut send: impl FnMut(ScanEvent) + Send,
 ) {
     let started = Instant::now();
-    let roots = unique_roots(roots);
+    let caches = if request.caches { caches::locate(policy) } else { Vec::new() };
+    let mut roots = unique_roots(request.roots);
+    // A root inside a cache is already covered by that cache's item.
+    roots.retain(|root| !caches.iter().any(|cache| root.starts_with(&cache.path)));
+    let step_around = roots.iter().chain(caches.iter().map(|cache| &cache.path)).cloned().collect();
     let counters = Counters::default();
     let (tx, rx) = mpsc::channel();
     let pool = rayon::ThreadPoolBuilder::new()
@@ -339,16 +408,39 @@ pub fn run(
         let (counters_ref, send_ref) = (&counters, &mut send);
         let collector = threads.spawn(move || collect(session, rx, counters_ref, send_ref));
 
+        if request.containers {
+            let tx = tx.clone();
+            threads.spawn(move || {
+                containers::scan(
+                    policy,
+                    &session.cancel,
+                    |item, target| {
+                        // Recorded before the UI hears of it, so it can be wiped as soon as it's shown.
+                        if let Ok(mut known) = session.containers.lock() {
+                            known.insert(item.path.clone(), target);
+                        }
+                        let _ = tx.send(Found::Item(item));
+                    },
+                    |message| {
+                        let _ = tx.send(Found::Notice(message));
+                    },
+                );
+            });
+        }
+
         let walk = Walk {
             session,
             counters: &counters,
             mounts,
             policy,
-            roots: roots.iter().cloned().collect(),
+            step_around,
             tx,
         };
         let walk_ref = &walk;
         pool.scope(|scope| {
+            for cache in &caches {
+                scope.spawn(move |_| walk_ref.emit_cache(cache));
+            }
             for root in roots {
                 if root.is_dir() {
                     scope.spawn(move |s| visit(s, walk_ref, root, Project::default(), true));
@@ -358,7 +450,7 @@ pub fn run(
             }
         });
 
-        // Dropping the sender is what tells the collector the walk is over.
+        // Dropping the last sender is what tells the collector everything is over.
         drop(walk);
         let _ = collector.join();
     });
@@ -389,10 +481,14 @@ pub(crate) mod tests {
 
     /// Scans `roots` as `policy` would, keyed by path relative to `base`.
     fn scan_with(base: &Path, roots: &[&Path], policy: &Policy) -> (BTreeMap<String, Item>, Vec<ScanEvent>) {
+        let roots = roots.iter().map(|r| r.to_string_lossy().into_owned()).collect();
+        scan_request(base, Request { roots, caches: false, containers: false }, policy)
+    }
+
+    fn scan_request(base: &Path, request: Request, policy: &Policy) -> (BTreeMap<String, Item>, Vec<ScanEvent>) {
         let session = Session::default();
         let mut events = Vec::new();
-        let roots = roots.iter().map(|r| r.to_string_lossy().into_owned()).collect();
-        run(&session, roots, &[], policy, |e| events.push(e));
+        run(&session, request, &[], policy, |e| events.push(e));
 
         let mut items = BTreeMap::new();
         let mut reported = HashSet::new();
@@ -622,7 +718,8 @@ pub(crate) mod tests {
         session.cancel.store(true, Ordering::Relaxed);
         let mut events = Vec::new();
         let roots = vec![dir.path().to_string_lossy().into_owned()];
-        run(&session, roots, &[], &Policy::current(), |e| events.push(e));
+        let request = Request { roots, caches: false, containers: false };
+        run(&session, request, &[], &Policy::current(), |e| events.push(e));
 
         assert!(session.found.lock().unwrap().is_empty());
         assert!(matches!(events.last(), Some(ScanEvent::Finished { cancelled: true, .. })));
@@ -668,5 +765,85 @@ pub(crate) mod tests {
 
         let (items, _) = scan(&root.join("app"));
         assert!(items.is_empty(), "offered a link: {:?}", items.keys());
+    }
+
+    fn caches_only(home: &Path, os: Os, roots: &[&Path]) -> BTreeMap<String, Item> {
+        let roots = roots.iter().map(|r| r.to_string_lossy().into_owned()).collect();
+        let request = Request { roots, caches: true, containers: false };
+        scan_request(home, request, &os_policy(os, Some(home))).0
+    }
+
+    #[test]
+    fn each_tool_cache_is_one_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        touch(home, ".npm/_cacache/index-v5/a", 100);
+        touch(home, ".npm/_cacache/content-v2/b", 20);
+        touch(home, ".cargo/registry/src/crate/lib.rs", 50);
+        touch(home, ".cargo/bin/cargo", 999);
+        fs::create_dir_all(home.join(".cache/pip")).unwrap();
+
+        let items = caches_only(home, Os::Linux, &[]);
+
+        let keys: Vec<&str> = items.keys().map(String::as_str).collect();
+        assert_eq!(keys, [".cargo/registry", ".npm/_cacache"], "an empty cache or a toolchain was listed");
+        let npm = &items[".npm/_cacache"];
+        assert_eq!(npm.size, 120);
+        assert_eq!(npm.category, Category::ToolCache);
+        assert_eq!(npm.project_name, CACHE_GROUP);
+        assert_eq!(npm.label.as_deref(), Some("npm cache"));
+    }
+
+    #[test]
+    fn caches_are_left_out_unless_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        touch(home, ".npm/_cacache/index-v5/a", 100);
+
+        let request = Request { roots: Vec::new(), caches: false, containers: false };
+        let (items, _) = scan_request(home, request, &os_policy(Os::Linux, Some(home)));
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn the_walk_steps_around_a_cache_instead_of_counting_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        touch(home, "AppData/Local/npm-cache/_npx/abc/package.json", 5);
+        touch(home, "AppData/Local/npm-cache/_npx/abc/node_modules/x.js", 100);
+        let local = home.join("AppData").join("Local");
+
+        let items = caches_only(home, Os::Windows, &[&local]);
+        let keys: Vec<&str> = items.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["AppData/Local/npm-cache/_npx"]);
+        assert_eq!(items["AppData/Local/npm-cache/_npx"].size, 105);
+
+        // Without the cache pass, the same folder is an ordinary project.
+        let (walked, _) = scan_with(home, &[&local], &os_policy(Os::Windows, Some(home)));
+        assert!(walked.contains_key("AppData/Local/npm-cache/_npx/abc/node_modules"));
+    }
+
+    #[test]
+    fn a_root_inside_a_cache_is_covered_by_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        touch(home, ".gradle/caches/9.4.1/thing/build.gradle", 5);
+        touch(home, ".gradle/caches/9.4.1/thing/build/out.class", 100);
+        let inside = home.join(".gradle").join("caches").join("9.4.1");
+
+        let items = caches_only(home, Os::Linux, &[&inside]);
+        let keys: Vec<&str> = items.keys().map(String::as_str).collect();
+        assert_eq!(keys, [".gradle/caches"]);
+    }
+
+    #[test]
+    fn a_cache_that_is_a_link_is_not_offered() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        touch(dir.path(), "elsewhere/index-v5/a", 100);
+        fs::create_dir_all(home.join(".npm")).unwrap();
+        link_dir(&dir.path().join("elsewhere"), &home.join(".npm").join("_cacache"));
+
+        assert!(caches_only(&home, Os::Linux, &[]).is_empty());
     }
 }

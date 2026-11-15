@@ -1,7 +1,7 @@
 [package]
 name = "buildwipe"
-version = "0.1.1"
-description = "Find and remove build artifacts across every disk"
+version = "1.5.0"
+description = "Find and remove build artifacts, tool caches and unused container images"
 authors = ["you"]
 license = "GPL-3.0-or-later"
 edition = "2024"

@@ -1,6 +1,6 @@
 //! Linux: the FHS system folders, snaps, AppImages, and pseudo file systems.
 
-use super::{IN_USE, NOT_EMPTY, Os, Platform, READ_ONLY_DISK, UNIX_DENIED};
+use super::{CacheDir, IN_USE, NOT_EMPTY, Os, Platform, READ_ONLY_DISK, UNIX_DENIED, cache};
 
 pub static PLATFORM: Platform = Platform {
     os: Os::Linux,
@@ -57,7 +57,33 @@ pub static PLATFORM: Platform = Platform {
     trash_name: "Trash",
     file_manager: "your file manager",
     explain_error,
+    caches: CACHES,
+    container_cli_dirs: &["/usr/local/bin", "/usr/bin", "~/.rd/bin"],
+    // Engines on Linux store their data on the disk itself, so freed space shows up at once.
+    container_note: None,
 };
+
+static CACHES: &[CacheDir] = &[
+    cache("npm cache", ".npm/_cacache"),
+    cache("npx packages", ".npm/_npx"),
+    cache("Yarn cache", ".cache/yarn"),
+    cache("node-gyp headers", ".cache/node-gyp"),
+    cache("Electron downloads", ".cache/electron"),
+    cache("electron-builder downloads", ".cache/electron-builder"),
+    cache("Cargo registry", ".cargo/registry"),
+    cache("Cargo git checkouts", ".cargo/git"),
+    cache("pip cache", ".cache/pip"),
+    cache("Gradle caches", ".gradle/caches"),
+    cache("Gradle wrapper downloads", ".gradle/wrapper/dists"),
+    cache("Maven repository", ".m2/repository"),
+    cache("NuGet packages", ".nuget/packages"),
+    cache("NuGet HTTP cache", ".local/share/NuGet/v3-cache"),
+    cache("Go build cache", ".cache/go-build"),
+    cache("Composer cache", ".cache/composer"),
+    cache("Dart and Flutter packages", ".pub-cache/hosted"),
+    cache("VS Code extension downloads", ".config/Code/CachedExtensionVSIXs"),
+    cache("VS Code code cache", ".config/Code/CachedData"),
+];
 
 fn explain_error(code: i32) -> Option<&'static str> {
     match code {

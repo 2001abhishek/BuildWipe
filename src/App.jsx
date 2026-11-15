@@ -17,7 +17,10 @@ import { bulkPaths, filterItems, groupByProject, summarize } from "./lib/results
 const INITIAL_FILTERS = { search: "", category: null, olderThanDays: 0, sort: "size" };
 
 // Neutral wording until the backend says which OS this is.
-const DEFAULT_PLATFORM = { os: null, trashName: "Trash", fileManager: "your file manager" };
+const DEFAULT_PLATFORM = { os: null, trashName: "Trash", fileManager: "your file manager", containerNote: null };
+
+// Tool caches and Docker/Podman are looked at alongside the chosen disks, unless turned off.
+const INITIAL_EXTRAS = { caches: true, containers: true };
 
 export default function App() {
   const scan = useScan();
@@ -27,6 +30,7 @@ export default function App() {
   const [disks, setDisks] = useState([]);
   const [chosenDisks, setChosenDisks] = useState(() => new Set());
   const [folders, setFolders] = useState([]);
+  const [extras, setExtras] = useState(INITIAL_EXTRAS);
   const [selected, setSelected] = useState(() => new Set());
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isConfirming, setIsConfirming] = useState(false);
@@ -102,7 +106,7 @@ export default function App() {
   function beginScan() {
     setSelected(new Set());
     setFilters(INITIAL_FILTERS);
-    scan.start([...chosenDisks, ...folders]);
+    scan.start({ roots: [...chosenDisks, ...folders], ...extras });
   }
 
   function backToSetup() {
@@ -142,7 +146,7 @@ export default function App() {
         <div className="flex min-w-0 items-center gap-2.5">
           <BrushCleaning className="size-6 shrink-0 text-primary" aria-hidden />
           <span className="text-lg font-extrabold tracking-tight">BuildWipe</span>
-          <span className="hidden truncate text-sm text-ink-faint lg:inline">Clean developer build leftovers</span>
+          <span className="hidden truncate text-sm text-ink-faint lg:inline">Clean developer leftovers</span>
           {updater.version && (
             <span className="font-secondary text-xs text-ink-faint">v{updater.version}</span>
           )}
@@ -164,6 +168,8 @@ export default function App() {
           disks={disks}
           chosenDisks={chosenDisks}
           folders={folders}
+          extras={extras}
+          onToggleExtra={(key) => setExtras((current) => ({ ...current, [key]: !current[key] }))}
           onToggleDisk={toggleDisk}
           onAddFolder={addFolder}
           onRemoveFolder={(folder) => setFolders((current) => current.filter((f) => f !== folder))}
@@ -176,6 +182,7 @@ export default function App() {
             disks={disks}
             summary={summary}
             selected={selected}
+            containerNote={platform.containerNote}
             activeCategory={filters.category}
             onFilterCategory={(key) =>
               setFilters((f) => ({ ...f, category: f.category === key ? null : key }))

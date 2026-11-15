@@ -1,3 +1,4 @@
+import { CATEGORIES } from "./categories";
 import { daysSince } from "./format";
 
 /** Totals for the reclaim panel: overall, per ecosystem and per disk. */
@@ -14,7 +15,8 @@ export function summarize(items, selected) {
   for (const item of items) {
     const isSelected = selected.has(item.path);
     summary.total += item.size;
-    summary.projects.add(item.projectPath);
+    // Tool caches and container engines aren't projects.
+    if (!CATEGORIES[item.category]?.extra) summary.projects.add(item.projectPath);
     if (isSelected) {
       summary.selectedBytes += item.size;
       summary.selectedCount += 1;
@@ -50,12 +52,20 @@ const SORTERS = {
   oldest: (a, b) => a.modified - b.modified,
 };
 
+/** Container items have engine ids instead of paths, so there's nothing to show in the file manager. */
+export function hasPath(item) {
+  return !item.path.startsWith("container://");
+}
+
 export function groupByProject(items, sort) {
   const groups = new Map();
   for (const item of items) {
-    let group = groups.get(item.projectPath);
+    // The name is part of the key, so a project at the home folder stays apart from the tool caches there.
+    const key = `${item.projectName}\u0000${item.projectPath}`;
+    let group = groups.get(key);
     if (!group) {
       group = {
+        key,
         path: item.projectPath,
         name: item.projectName,
         items: [],
@@ -64,7 +74,7 @@ export function groupByProject(items, sort) {
         needsReview: false,
         categories: new Set(),
       };
-      groups.set(item.projectPath, group);
+      groups.set(key, group);
     }
     group.items.push(item);
     group.size += item.size;

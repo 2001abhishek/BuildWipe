@@ -3,6 +3,21 @@
 
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+
+/// A command for a command-line tool, such as the Docker CLI. On Windows it
+/// runs without opening a console window over the app.
+pub fn command(program: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
 
 /// Removes what stops the owner from deleting a folder: the read-only
 /// attribute on Windows, and missing write permission on Unix folders.

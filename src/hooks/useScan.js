@@ -8,6 +8,8 @@ const initialState = {
   current: "",
   result: null,
   error: null,
+  // Things to tell the user about the scan, such as Docker not running.
+  notices: [],
 };
 
 function reducer(state, action) {
@@ -20,6 +22,8 @@ function reducer(state, action) {
       return { ...state, items: state.items.concat(action.items) };
     case "progress":
       return { ...state, dirs: action.dirs, current: action.current };
+    case "notice":
+      return { ...state, notices: [...state.notices, action.message] };
     case "finished":
       return {
         ...state,
@@ -51,9 +55,9 @@ function reducer(state, action) {
 export function useScan() {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  const start = useCallback((roots) => {
+  const start = useCallback((request) => {
     dispatch({ type: "start" });
-    startScan(roots, dispatch).catch((error) =>
+    startScan(request, dispatch).catch((error) =>
       dispatch({ type: "error", message: String(error) }),
     );
   }, []);

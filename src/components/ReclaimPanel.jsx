@@ -1,4 +1,4 @@
-import { CircleStop, LoaderCircle, Trash2, TriangleAlert } from "lucide-react";
+import { CircleStop, Info, LoaderCircle, Trash2, TriangleAlert } from "lucide-react";
 import { CATEGORIES, CATEGORY_KEYS } from "../lib/categories";
 import { formatBytes, formatCount, formatDuration, plural } from "../lib/format";
 import { bulkState } from "../lib/results";
@@ -124,7 +124,27 @@ function ScanStatus({ scan, onStop }) {
   );
 }
 
-export function ReclaimPanel({ scan, disks, summary, selected, activeCategory, onFilterCategory, onBulk, onStop, onWipe }) {
+function InfoNote({ children }) {
+  return (
+    <p className="flex gap-2 rounded-xl border border-line bg-surface p-3 text-xs leading-relaxed text-ink-muted">
+      <Info className="size-4 shrink-0 text-secondary" aria-hidden />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+export function ReclaimPanel({
+  scan,
+  disks,
+  summary,
+  selected,
+  containerNote,
+  activeCategory,
+  onFilterCategory,
+  onBulk,
+  onStop,
+  onWipe,
+}) {
   const shownDisks = disks.filter((disk) => summary.byMount.has(disk.mount));
   const categories = CATEGORY_KEYS.filter((key) => summary.byCategory.has(key)).sort(
     (a, b) => summary.byCategory.get(b).bytes - summary.byCategory.get(a).bytes,
@@ -139,7 +159,8 @@ export function ReclaimPanel({ scan, disks, summary, selected, activeCategory, o
             {formatBytes(summary.total)}
           </p>
           <p className="mt-2 text-sm text-ink-muted">
-            {plural(summary.projects.size, "project")}, {plural(scan.items.length, "item")}
+            {summary.projects.size > 0 && `${plural(summary.projects.size, "project")}, `}
+            {plural(scan.items.length, "item")}
           </p>
           <p className="mt-1 text-sm text-ink-muted">
             <span className="font-secondary font-semibold text-ink">{formatBytes(summary.selectedBytes)}</span> selected
@@ -147,6 +168,9 @@ export function ReclaimPanel({ scan, disks, summary, selected, activeCategory, o
         </section>
 
         <ScanStatus scan={scan} onStop={onStop} />
+        {scan.notices.map((notice) => (
+          <InfoNote key={notice}>{notice}</InfoNote>
+        ))}
 
         {shownDisks.length > 0 && (
           <section className="flex flex-col gap-4">
@@ -181,6 +205,8 @@ export function ReclaimPanel({ scan, disks, summary, selected, activeCategory, o
             </div>
           </section>
         )}
+
+        {containerNote && summary.byCategory.has("container") && <InfoNote>{containerNote}</InfoNote>}
       </div>
 
       <div className="border-t border-line p-3 xl:p-4">

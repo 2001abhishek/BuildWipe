@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "buildwipe"
-version = "0.1.1"
+version = "1.5.0"
 dependencies = [
  "rayon",
  "serde",

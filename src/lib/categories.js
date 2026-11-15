@@ -1,5 +1,6 @@
 // Display details for each ecosystem. Class names are written out in full so
-// Tailwind can find them when it scans the source.
+// Tailwind can find them when it scans the source. `extra` marks the sources
+// the setup screen offers as their own options rather than as project folders.
 export const CATEGORIES = {
   node: {
     label: "Node.js",
@@ -61,6 +62,21 @@ export const CATEGORIES = {
     restore: "Nothing to do. The OS recreates them if needed.",
     dot: "bg-eco-junk",
   },
+  toolCache: {
+    label: "Tool caches",
+    finds: "npm, Yarn, Cargo, pip, Gradle, Maven, NuGet, Go, Composer, VS Code, old Temp files",
+    restore: "Nothing to do. Each tool downloads or rebuilds what it needs, so the next install or build is slower.",
+    dot: "bg-eco-cache",
+    extra: true,
+  },
+  container: {
+    label: "Docker / Podman",
+    finds: "Unused images, stopped containers, build cache",
+    restore: "docker pull or podman pull, or build the image again",
+    dot: "bg-eco-container",
+    extra: true,
+  },
 };
 
 export const CATEGORY_KEYS = Object.keys(CATEGORIES);
+export const PROJECT_CATEGORY_KEYS = CATEGORY_KEYS.filter((key) => !CATEGORIES[key].extra);

@@ -24,6 +24,10 @@ pub enum Category {
     GameEngine,
     Terraform,
     OsJunk,
+    /// A developer tool's download cache, from `Platform::caches`. Never matched by name.
+    ToolCache,
+    /// An unused image, stopped container or build cache in Docker or Podman.
+    Container,
 }
 
 /// Lower-cased names of everything in one directory.

@@ -58,6 +58,34 @@ pub struct Platform {
     pub file_manager: &'static str,
     /// A plain-language explanation for an OS error code, when there's a better one than the OS's.
     pub explain_error: fn(i32) -> Option<&'static str>,
+    /// Developer tool caches, relative to the home folder with `/` separators.
+    /// Only folders the tool downloads or rebuilds by itself belong here.
+    pub caches: &'static [CacheDir],
+    /// Where Docker and Podman CLIs live when they aren't on PATH, which is
+    /// common for apps opened from Finder. A leading `~/` means the home folder.
+    pub container_cli_dirs: &'static [&'static str],
+    /// Shown beside container items when the space they free may not reach the disk straight away.
+    pub container_note: Option<&'static str>,
+}
+
+/// One developer tool cache, at a fixed place under the home folder.
+pub struct CacheDir {
+    pub label: &'static str,
+    pub path: &'static str,
+    pub cleanup: Cleanup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cleanup {
+    /// The whole folder goes. The tool recreates it.
+    Whole,
+    /// Only entries directly inside it that nothing has touched for this many
+    /// days, because programs may be using the newer ones. Used for Temp.
+    OlderThanDays(u64),
+}
+
+pub(crate) const fn cache(label: &'static str, path: &'static str) -> CacheDir {
+    CacheDir { label, path, cleanup: Cleanup::Whole }
 }
 
 /// Hidden folders are skipped, except virtualenvs, which are artifacts themselves.
@@ -96,6 +124,7 @@ pub struct PlatformInfo {
     os: Os,
     trash_name: &'static str,
     file_manager: &'static str,
+    container_note: Option<&'static str>,
 }
 
 impl Platform {
@@ -116,6 +145,7 @@ impl Platform {
             os: self.os,
             trash_name: self.trash_name,
             file_manager: self.file_manager,
+            container_note: self.container_note,
         }
     }
 
@@ -208,6 +238,41 @@ impl Policy {
             .iter()
             .chain(self.platform.installed_markers)
             .any(|marker| listing.has(marker))
+    }
+
+    pub fn home(&self) -> Option<&Path> {
+        self.home.as_deref()
+    }
+
+    /// Every cache location for this OS and user, whether or not it exists.
+    pub fn cache_dirs(&self) -> Vec<(PathBuf, &'static CacheDir)> {
+        let Some(home) = &self.home else { return Vec::new() };
+        self.platform
+            .caches
+            .iter()
+            .map(|dir| (dir.path.split('/').fold(home.clone(), |path, part| path.join(part)), dir))
+            .collect()
+    }
+
+    /// The cache that lives exactly at `path`. Its parent, its contents and its
+    /// neighbours are not caches.
+    pub fn cache_at(&self, path: &Path) -> Option<&'static CacheDir> {
+        self.cache_dirs()
+            .into_iter()
+            .find(|(location, _)| location == path)
+            .map(|(_, dir)| dir)
+    }
+
+    /// Where to look for a container CLI that isn't on PATH.
+    pub fn container_cli_dirs(&self) -> Vec<PathBuf> {
+        self.platform
+            .container_cli_dirs
+            .iter()
+            .filter_map(|dir| match dir.strip_prefix("~/") {
+                Some(rest) => self.home.as_ref().map(|home| home.join(rest)),
+                None => Some(PathBuf::from(dir)),
+            })
+            .collect()
     }
 }
 
@@ -385,5 +450,118 @@ mod tests {
         assert_eq!(Platform::for_os(Os::Windows).trash_name, "Recycle Bin");
         assert_eq!(Platform::for_os(Os::Macos).file_manager, "Finder");
         assert_eq!(Platform::for_os(Os::Linux).trash_name, "Trash");
+    }
+
+    #[test]
+    fn every_os_lists_its_tool_caches_as_plain_relative_paths() {
+        for os in ALL {
+            let caches = Platform::for_os(os).caches;
+            assert!(caches.len() >= 10, "{os:?}");
+            let mut seen = std::collections::HashSet::new();
+            for dir in caches {
+                assert!(seen.insert(dir.path), "{os:?} lists {} twice", dir.path);
+                assert!(!dir.label.is_empty());
+                assert!(!dir.path.starts_with('/') && !dir.path.contains('\\'), "{}", dir.path);
+                assert!(dir.path.split('/').all(|part| !part.is_empty() && part != ".." && part != "."), "{}", dir.path);
+            }
+            // One cache inside another would be counted twice.
+            for a in caches {
+                for b in caches {
+                    let nested = a.path != b.path && a.path.starts_with(&format!("{}/", b.path));
+                    assert!(!nested, "{os:?}: {} is inside {}", a.path, b.path);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn caches_never_include_toolchains_or_user_data() {
+        // Installed tools, globally installed packages and things the user made.
+        let forbidden = [
+            ".rustup",
+            ".cargo/bin",
+            "go/pkg/mod",
+            "android/sdk",
+            ".android/avd",
+            "downloads",
+            "documents",
+            "desktop",
+            ".ssh",
+            "pub/cache/bin",
+            "pub/cache/global_packages",
+            "xcode/archives",
+            "appdata/roaming/npm",
+        ];
+        for os in ALL {
+            for dir in Platform::for_os(os).caches {
+                let lower = dir.path.to_lowercase();
+                for bad in forbidden {
+                    assert!(!lower.contains(bad), "{os:?} lists {}", dir.path);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_temp_is_cleaned_by_age() {
+        for os in ALL {
+            for dir in Platform::for_os(os).caches {
+                let is_temp = dir.path.to_lowercase().ends_with("/temp");
+                assert_eq!(matches!(dir.cleanup, Cleanup::OlderThanDays(_)), is_temp, "{}", dir.path);
+            }
+        }
+    }
+
+    #[test]
+    fn a_cache_matches_only_its_exact_folder() {
+        let policy = policy(Os::Linux);
+        let home = Path::new("/home/me");
+        assert!(policy.cache_at(&home.join(".npm").join("_cacache")).is_some());
+        assert!(policy.cache_at(&home.join(".gradle").join("caches")).is_some());
+
+        for not_a_cache in [
+            home.to_path_buf(),
+            home.join(".npm"),
+            home.join(".npm").join("_cacache").join("index-v5"),
+            home.join(".npm").join("_logs"),
+            home.join(".gradle"),
+            home.join(".cargo"),
+            home.join(".cargo").join("bin"),
+            PathBuf::from("/other/user/.npm/_cacache"),
+        ] {
+            assert!(policy.cache_at(&not_a_cache).is_none(), "{}", not_a_cache.display());
+        }
+    }
+
+    #[test]
+    fn caches_need_a_known_home() {
+        let homeless = Policy::new(Platform::for_os(Os::Linux), None);
+        assert!(homeless.cache_dirs().is_empty());
+        assert!(homeless.cache_at(Path::new("/home/me/.npm/_cacache")).is_none());
+    }
+
+    #[test]
+    fn windows_caches_resolve_under_appdata() {
+        let policy = Policy::new(Platform::for_os(Os::Windows), Some(PathBuf::from(r"C:\Users\me")));
+        let npm = PathBuf::from(r"C:\Users\me").join("AppData").join("Local").join("npm-cache").join("_cacache");
+        assert_eq!(policy.cache_at(&npm).map(|d| d.label), Some("npm cache"));
+    }
+
+    #[test]
+    fn container_cli_dirs_expand_the_home_folder() {
+        let dirs = policy(Os::Macos).container_cli_dirs();
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(dirs.contains(&Path::new("/home/me").join(".orbstack/bin")));
+        assert!(Policy::new(Platform::for_os(Os::Macos), None)
+            .container_cli_dirs()
+            .iter()
+            .all(|dir| !dir.to_string_lossy().contains('~')));
+    }
+
+    #[test]
+    fn only_virtual_disk_engines_warn_about_delayed_space() {
+        assert!(Platform::for_os(Os::Windows).container_note.is_some());
+        assert!(Platform::for_os(Os::Macos).container_note.is_some());
+        assert!(Platform::for_os(Os::Linux).container_note.is_none());
     }
 }

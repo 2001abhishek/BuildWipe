@@ -10,8 +10,9 @@ function channelFor(onEvent) {
 
 export const listDisks = () => invoke("list_disks");
 export const platformInfo = () => invoke("platform_info");
-export const startScan = (roots, onEvent) =>
-  invoke("start_scan", { roots, onEvent: channelFor(onEvent) });
+/** `request` is `{ roots, caches, containers }`. */
+export const startScan = ({ roots, caches, containers }, onEvent) =>
+  invoke("start_scan", { roots, caches, containers, onEvent: channelFor(onEvent) });
 export const cancelScan = () => invoke("cancel_scan");
 export const clearScan = () => invoke("clear_scan");
 export const startWipe = (paths, onEvent) =>
